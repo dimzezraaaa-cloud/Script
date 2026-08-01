@@ -1,0 +1,178 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+
+-- Remote Events Path
+local networkRemotes = ReplicatedStorage:WaitForChild("SharedModules"):WaitForChild("Network"):WaitForChild("Remotes")
+local collectEarningsEvent = networkRemotes:WaitForChild("Collect Earnings")
+local upgradeSlimeEvent = networkRemotes:WaitForChild("Upgrade Slime")
+
+local isFarming = false
+local isUpgrading = false
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AutoFarmUpgradeGUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.DisplayOrder = 100
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.Parent = player:WaitForChild("PlayerGui")
+
+-- Open / Close Button (Bulat & Draggable)
+local OpenBtn = Instance.new("TextButton")
+OpenBtn.Name = "OpenBtn"
+OpenBtn.Size = UDim2.new(0, 45, 0, 45)
+OpenBtn.Position = UDim2.new(0, 20, 0.3, 0)
+OpenBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+OpenBtn.BackgroundTransparency = 0
+OpenBtn.Text = "MENU"
+OpenBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+OpenBtn.TextSize = 10
+OpenBtn.Font = Enum.Font.SourceSansBold
+OpenBtn.Active = true
+OpenBtn.Parent = ScreenGui
+
+local OpenCorner = Instance.new("UICorner")
+OpenCorner.CornerRadius = UDim.new(1, 0)
+OpenCorner.Parent = OpenBtn
+
+local OpenStroke = Instance.new("UIStroke")
+OpenStroke.Color = Color3.fromRGB(255, 0, 50)
+OpenStroke.Thickness = 2
+OpenStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+OpenStroke.Parent = OpenBtn
+
+-- Main Frame (Kotak Solid, Border Merah Neon)
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 160, 0, 95)
+MainFrame.Position = UDim2.new(0, 75, 0.3, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+MainFrame.BackgroundTransparency = 0
+MainFrame.Visible = true
+MainFrame.Active = true
+MainFrame.Parent = ScreenGui
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(255, 0, 50)
+MainStroke.Thickness = 2
+MainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+MainStroke.Parent = MainFrame
+
+-- Button Farm Money
+local FarmBtn = Instance.new("TextButton")
+FarmBtn.Name = "FarmBtn"
+FarmBtn.Size = UDim2.new(1, -12, 0, 36)
+FarmBtn.Position = UDim2.new(0, 6, 0, 8)
+FarmBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+FarmBtn.BackgroundTransparency = 0
+FarmBtn.Text = "FARM: OFF"
+FarmBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+FarmBtn.TextSize = 11
+FarmBtn.Font = Enum.Font.SourceSansBold
+FarmBtn.Parent = MainFrame
+
+-- Button Auto Upgrade
+local UpgradeBtn = Instance.new("TextButton")
+UpgradeBtn.Name = "UpgradeBtn"
+UpgradeBtn.Size = UDim2.new(1, -12, 0, 36)
+UpgradeBtn.Position = UDim2.new(0, 6, 0, 50)
+UpgradeBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+UpgradeBtn.BackgroundTransparency = 0
+UpgradeBtn.Text = "UPGRADE: OFF"
+UpgradeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+UpgradeBtn.TextSize = 11
+UpgradeBtn.Font = Enum.Font.SourceSansBold
+UpgradeBtn.Parent = MainFrame
+
+-- Draggable Engine
+local function makeDraggable(guiObject)
+	local dragging = false
+	local dragInput, dragStart, startPos
+
+	guiObject.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = guiObject.Position
+
+			input.Changed:Connect(function(inputState)
+				if inputState.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+
+	guiObject.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if input == dragInput and dragging then
+			local delta = input.Position - dragStart
+			guiObject.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		end
+	end)
+end
+
+makeDraggable(MainFrame)
+makeDraggable(OpenBtn)
+
+-- Toggle Menu Visible
+OpenBtn.MouseButton1Click:Connect(function()
+	MainFrame.Visible = not MainFrame.Visible
+end)
+
+-- Farm Money Logic (1 to 100, String Index)
+local function startFarming()
+	task.spawn(function()
+		while isFarming do
+			for i = 1, 100 do
+				if not isFarming then break end
+				collectEarningsEvent:FireServer(tostring(i))
+			end
+			task.wait(0.1)
+		end
+	end)
+end
+
+FarmBtn.MouseButton1Click:Connect(function()
+	isFarming = not isFarming
+	if isFarming then
+		FarmBtn.Text = "FARM: ON"
+		FarmBtn.TextColor3 = Color3.fromRGB(255, 0, 50)
+		startFarming()
+	else
+		FarmBtn.Text = "FARM: OFF"
+		FarmBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	end
+end)
+
+-- Auto Upgrade Slime Logic (1 to 100, String Index, 0.5s Delay)
+local function startUpgrading()
+	task.spawn(function()
+		while isUpgrading do
+			for i = 1, 100 do
+				if not isUpgrading then break end
+				upgradeSlimeEvent:FireServer(tostring(i))
+			end
+			task.wait(0.5)
+		end
+	end)
+end
+
+UpgradeBtn.MouseButton1Click:Connect(function()
+	isUpgrading = not isUpgrading
+	if isUpgrading then
+		UpgradeBtn.Text = "UPGRADE: ON"
+		UpgradeBtn.TextColor3 = Color3.fromRGB(255, 0, 50)
+		startUpgrading()
+	else
+		UpgradeBtn.Text = "UPGRADE: OFF"
+		UpgradeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	end
+end)
