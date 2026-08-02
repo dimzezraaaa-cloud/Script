@@ -8,6 +8,7 @@ local player = Players.LocalPlayer
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 local digEvent = remotes:WaitForChild("DigEvent")
 local gemEvent = remotes:WaitForChild("GemEvent")
+local treasureEvent = remotes:WaitForChild("TreasureEvent")
 
 local isDigging = false
 local isGemming = false
@@ -152,13 +153,14 @@ DigBtn.MouseButton1Click:Connect(function()
 	end
 end)
 
--- Spam Gem Logic (0.1s Delay)
+-- Spam Gem Logic (GemEvent + TreasureEvent, 0.1s Delay)
 local function startGemming()
 	task.spawn(function()
 		while isGemming do
 			for i = 1, 50 do
 				if not isGemming then break end
 				gemEvent:FireServer(20, "bye")
+				treasureEvent:FireServer("Chest2")
 			end
 			task.wait(0.1)
 		end
