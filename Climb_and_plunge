@@ -1,0 +1,292 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+
+-- Target Key & Link Config
+local CORRECT_KEY = "FreFrtaihwg826282HakaGajveHgsb726)(-$-*&)1827"
+local KEY_LINK = "https://keysysvfmbr1.netlify.app/"
+
+-- Remote Events Path
+local remoteFolder = ReplicatedStorage:WaitForChild("Remote"):WaitForChild("Event")
+local addCoinsOrWinsEvent = remoteFolder:WaitForChild("Race"):WaitForChild("AddCoinsOrWins")
+local getRewardEvent = remoteFolder:WaitForChild("Online"):WaitForChild("[C-S]IWannaGetThisReward")
+local getSpinRewardEvent = remoteFolder:WaitForChild("Spin"):WaitForChild("[C-S]GetSpinReward")
+
+-- ScreenGui Setup
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "RaceRewardGUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.DisplayOrder = 100
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.Parent = player:WaitForChild("PlayerGui")
+
+-- Helper Function for Draggable
+local function makeDraggable(guiObject)
+	local dragging = false
+	local dragInput, dragStart, startPos
+
+	guiObject.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = guiObject.Position
+
+			input.Changed:Connect(function(inputState)
+				if inputState.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+
+	guiObject.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if input == dragInput and dragging then
+			local delta = input.Position - dragStart
+			guiObject.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		end
+	end)
+end
+
+--------------------------------------------------------------------------------
+-- KEY SYSTEM FRAME
+--------------------------------------------------------------------------------
+local KeyFrame = Instance.new("Frame")
+KeyFrame.Name = "KeyFrame"
+KeyFrame.Size = UDim2.new(0, 220, 0, 160)
+KeyFrame.Position = UDim2.new(0.5, -110, 0.4, -80)
+KeyFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+KeyFrame.BackgroundTransparency = 0.5
+KeyFrame.BorderSizePixel = 0
+KeyFrame.Active = true
+KeyFrame.Visible = true
+KeyFrame.Parent = ScreenGui
+
+local KeyCorner = Instance.new("UICorner")
+KeyCorner.CornerRadius = UDim.new(0, 12)
+KeyCorner.Parent = KeyFrame
+
+local KeyStroke = Instance.new("UIStroke")
+KeyStroke.Color = Color3.fromRGB(255, 0, 50)
+KeyStroke.Thickness = 2
+KeyStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+KeyStroke.Parent = KeyFrame
+
+local KeyTitle = Instance.new("TextLabel")
+KeyTitle.Name = "KeyTitle"
+KeyTitle.Size = UDim2.new(1, 0, 0, 30)
+KeyTitle.Position = UDim2.new(0, 0, 0, 5)
+KeyTitle.BackgroundTransparency = 1
+KeyTitle.Text = "KEY SYSTEM"
+KeyTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+KeyTitle.TextSize = 13
+KeyTitle.Font = Enum.Font.SourceSansBold
+KeyTitle.Parent = KeyFrame
+
+-- Text Box Input Key
+local KeyTextBox = Instance.new("TextBox")
+KeyTextBox.Name = "KeyTextBox"
+KeyTextBox.Size = UDim2.new(1, -20, 0, 32)
+KeyTextBox.Position = UDim2.new(0, 10, 0, 40)
+KeyTextBox.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+KeyTextBox.BackgroundTransparency = 0.2
+KeyTextBox.Text = ""
+KeyTextBox.PlaceholderText = "Enter Key..."
+KeyTextBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+KeyTextBox.PlaceholderColor3 = Color3.fromRGB(150, 150, 150)
+KeyTextBox.TextSize = 11
+KeyTextBox.Font = Enum.Font.SourceSans
+KeyTextBox.ClearTextOnFocus = false
+KeyTextBox.Parent = KeyFrame
+
+local BoxCorner = Instance.new("UICorner")
+BoxCorner.CornerRadius = UDim.new(0, 16)
+BoxCorner.Parent = KeyTextBox
+
+-- Enter Button
+local EnterBtn = Instance.new("TextButton")
+EnterBtn.Name = "EnterBtn"
+EnterBtn.Size = UDim2.new(1, -20, 0, 30)
+EnterBtn.Position = UDim2.new(0, 10, 0, 80)
+EnterBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+EnterBtn.BackgroundTransparency = 0.2
+EnterBtn.Text = "ENTER"
+EnterBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+EnterBtn.TextSize = 11
+EnterBtn.Font = Enum.Font.SourceSansBold
+EnterBtn.Parent = KeyFrame
+
+local EnterCorner = Instance.new("UICorner")
+EnterCorner.CornerRadius = UDim.new(0, 15)
+EnterCorner.Parent = EnterBtn
+
+-- Key Link Button
+local LinkBtn = Instance.new("TextButton")
+LinkBtn.Name = "LinkBtn"
+LinkBtn.Size = UDim2.new(1, -20, 0, 30)
+LinkBtn.Position = UDim2.new(0, 10, 0, 118)
+LinkBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+LinkBtn.BackgroundTransparency = 0.2
+LinkBtn.Text = "GET KEY LINK"
+LinkBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+LinkBtn.TextSize = 11
+LinkBtn.Font = Enum.Font.SourceSansBold
+LinkBtn.Parent = KeyFrame
+
+local LinkCorner = Instance.new("UICorner")
+LinkCorner.CornerRadius = UDim.new(0, 15)
+LinkCorner.Parent = LinkBtn
+
+makeDraggable(KeyFrame)
+
+--------------------------------------------------------------------------------
+-- MAIN MENU (TERSEMBUNYI SANGAT AWAL)
+--------------------------------------------------------------------------------
+local OpenBtn = Instance.new("TextButton")
+OpenBtn.Name = "OpenBtn"
+OpenBtn.Size = UDim2.new(0, 45, 0, 45)
+OpenBtn.Position = UDim2.new(0, 20, 0.3, 0)
+OpenBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+OpenBtn.BackgroundTransparency = 0
+OpenBtn.Text = "MENU"
+OpenBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+OpenBtn.TextSize = 10
+OpenBtn.Font = Enum.Font.SourceSansBold
+OpenBtn.Active = true
+OpenBtn.Visible = false
+OpenBtn.Parent = ScreenGui
+
+local OpenCorner = Instance.new("UICorner")
+OpenCorner.CornerRadius = UDim.new(1, 0)
+OpenCorner.Parent = OpenBtn
+
+local OpenStroke = Instance.new("UIStroke")
+OpenStroke.Color = Color3.fromRGB(255, 0, 50)
+OpenStroke.Thickness = 2
+OpenStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+OpenStroke.Parent = OpenBtn
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 160, 0, 175)
+MainFrame.Position = UDim2.new(0, 75, 0.3, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+MainFrame.BackgroundTransparency = 0
+MainFrame.Visible = false
+MainFrame.Active = true
+MainFrame.Parent = ScreenGui
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(255, 0, 50)
+MainStroke.Thickness = 2
+MainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+MainStroke.Parent = MainFrame
+
+-- Button Inf Wins
+local WinsBtn = Instance.new("TextButton")
+WinsBtn.Name = "WinsBtn"
+WinsBtn.Size = UDim2.new(1, -12, 0, 34)
+WinsBtn.Position = UDim2.new(0, 6, 0, 8)
+WinsBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+WinsBtn.BackgroundTransparency = 0
+WinsBtn.Text = "INF WINS"
+WinsBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+WinsBtn.TextSize = 11
+WinsBtn.Font = Enum.Font.SourceSansBold
+WinsBtn.Parent = MainFrame
+
+-- Button Inf Money
+local MoneyBtn = Instance.new("TextButton")
+MoneyBtn.Name = "MoneyBtn"
+MoneyBtn.Size = UDim2.new(1, -12, 0, 34)
+MoneyBtn.Position = UDim2.new(0, 6, 0, 48)
+MoneyBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+MoneyBtn.BackgroundTransparency = 0
+MoneyBtn.Text = "INF MONEY"
+MoneyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MoneyBtn.TextSize = 11
+MoneyBtn.Font = Enum.Font.SourceSansBold
+MoneyBtn.Parent = MainFrame
+
+-- Button Get All Reward
+local RewardBtn = Instance.new("TextButton")
+RewardBtn.Name = "RewardBtn"
+RewardBtn.Size = UDim2.new(1, -12, 0, 34)
+RewardBtn.Position = UDim2.new(0, 6, 0, 88)
+RewardBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+RewardBtn.BackgroundTransparency = 0
+RewardBtn.Text = "GET ALL REWARD"
+RewardBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+RewardBtn.TextSize = 11
+RewardBtn.Font = Enum.Font.SourceSansBold
+RewardBtn.Parent = MainFrame
+
+-- Button Get 250% OP PET
+local PetBtn = Instance.new("TextButton")
+PetBtn.Name = "PetBtn"
+PetBtn.Size = UDim2.new(1, -12, 0, 34)
+PetBtn.Position = UDim2.new(0, 6, 0, 128)
+PetBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+PetBtn.BackgroundTransparency = 0
+PetBtn.Text = "GET 250% OP PET"
+PetBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+PetBtn.TextSize = 11
+PetBtn.Font = Enum.Font.SourceSansBold
+PetBtn.Parent = MainFrame
+
+makeDraggable(MainFrame)
+makeDraggable(OpenBtn)
+
+--------------------------------------------------------------------------------
+-- LOGIC EVENT & KEY SYSTEM
+--------------------------------------------------------------------------------
+EnterBtn.MouseButton1Click:Connect(function()
+	if KeyTextBox.Text == CORRECT_KEY then
+		KeyFrame.Visible = false
+		OpenBtn.Visible = true
+		MainFrame.Visible = true
+	else
+		KeyTextBox.Text = ""
+		KeyTextBox.PlaceholderText = "INCORRECT KEY"
+	end
+end)
+
+LinkBtn.MouseButton1Click:Connect(function()
+	if setclipboard then
+		setclipboard(KEY_LINK)
+	elseif toclipboard then
+		toclipboard(KEY_LINK)
+	end
+	LinkBtn.Text = "COPIED TO CLIPBOARD"
+	task.wait(1.5)
+	LinkBtn.Text = "GET KEY LINK"
+end)
+
+OpenBtn.MouseButton1Click:Connect(function()
+	MainFrame.Visible = not MainFrame.Visible
+end)
+
+WinsBtn.MouseButton1Click:Connect(function()
+	addCoinsOrWinsEvent:FireServer(math.huge, "Wins")
+end)
+
+MoneyBtn.MouseButton1Click:Connect(function()
+	addCoinsOrWinsEvent:FireServer(math.huge, "Coins")
+end)
+
+RewardBtn.MouseButton1Click:Connect(function()
+	for i = 1, 12 do
+		getRewardEvent:FireServer(i)
+	end
+end)
+
+PetBtn.MouseButton1Click:Connect(function()
+	getSpinRewardEvent:FireServer(300006)
+end)
