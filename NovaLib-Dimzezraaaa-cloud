@@ -1,0 +1,114 @@
+-- NovaLib_Core.lua
+-- Bootstrap, konstanta, utility functions
+
+local NovaLib = {}
+NovaLib.__index = NovaLib
+
+NovaLib.COLORS = {
+    bg        = Color3.fromRGB(15, 15, 20),
+    sidebar   = Color3.fromRGB(20, 20, 28),
+    accent    = Color3.fromRGB(99, 102, 241),
+    accent2   = Color3.fromRGB(79, 82, 211),
+    text      = Color3.fromRGB(240, 240, 255),
+    subtext   = Color3.fromRGB(140, 140, 165),
+    element   = Color3.fromRGB(28, 28, 38),
+    element2  = Color3.fromRGB(38, 38, 52),
+    border    = Color3.fromRGB(45, 45, 62),
+    success   = Color3.fromRGB(52, 211, 153),
+    danger    = Color3.fromRGB(239, 68, 68),
+    topbar    = Color3.fromRGB(18, 18, 26),
+}
+
+local TweenService     = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+function NovaLib.tween(obj, props, dur, style, dir)
+    style = style or Enum.EasingStyle.Quart
+    dir   = dir   or Enum.EasingDirection.Out
+    TweenService:Create(obj, TweenInfo.new(dur or 0.25, style, dir), props):Play()
+end
+
+function NovaLib.ripple(parent)
+    local rip = Instance.new("Frame")
+    rip.BackgroundColor3 = Color3.new(1,1,1)
+    rip.BackgroundTransparency = 0.85
+    rip.AnchorPoint = Vector2.new(0.5, 0.5)
+    rip.Position    = UDim2.fromScale(0.5, 0.5)
+    rip.Size        = UDim2.fromOffset(0, 0)
+    rip.ZIndex      = parent.ZIndex + 5
+    rip.ClipsDescendants = false
+    Instance.new("UICorner", rip).CornerRadius = UDim.new(1,0)
+    rip.Parent = parent
+    NovaLib.tween(rip, {
+        Size = UDim2.fromOffset(parent.AbsoluteSize.X * 2.5, parent.AbsoluteSize.X * 2.5),
+        BackgroundTransparency = 1
+    }, 0.45)
+    game:GetService("Debris"):AddItem(rip, 0.5)
+end
+
+function NovaLib.corner(parent, radius)
+    local c = Instance.new("UICorner", parent)
+    c.CornerRadius = UDim.new(0, radius or 8)
+    return c
+end
+
+function NovaLib.stroke(parent, color, thickness)
+    local s = Instance.new("UIStroke", parent)
+    s.Color           = color or NovaLib.COLORS.border
+    s.Thickness       = thickness or 1
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    return s
+end
+
+function NovaLib.padding(parent, all)
+    local p = Instance.new("UIPadding", parent)
+    local u = UDim.new(0, all or 8)
+    p.PaddingTop, p.PaddingBottom, p.PaddingLeft, p.PaddingRight = u, u, u, u
+    return p
+end
+
+function NovaLib.listLayout(parent, dir, pad)
+    local l = Instance.new("UIListLayout", parent)
+    l.FillDirection = dir or Enum.FillDirection.Vertical
+    l.SortOrder     = Enum.SortOrder.LayoutOrder
+    l.Padding       = UDim.new(0, pad or 6)
+    return l
+end
+
+function NovaLib.makeDraggable(frame, handle)
+    handle = handle or frame
+    local dragging, dragInput, dragStart, startPos
+
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or
+           input.UserInputType == Enum.UserInputType.Touch then
+            dragging  = true
+            dragStart = input.Position
+            startPos  = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    handle.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or
+           input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+end
+
+return NovaLib
