@@ -118,7 +118,6 @@ function NovaLibs:CreateWindow(opts)
     ScreenGui.IgnoreGuiInset = true
     ScreenGui.Parent = CoreGui
 
-    -- Open UI Button (sama kayak rayfield, nama = title)
     local OpenBtn = Instance.new("TextButton")
     OpenBtn.BackgroundColor3 = C.topbar
     OpenBtn.Size = UDim2.fromOffset(120, 36)
