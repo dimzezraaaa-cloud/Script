@@ -684,6 +684,4 @@ function Tab:CreateDropdown(o)
     return Win
 end
 
-local Nova = NovaLibs
-local win = Nova:CreateWindow({ Title = "My Hub", Subtitle = "v1.0" })
-local tab = win:CreateTab({ Name = "Main" })
+return NovaLibs
