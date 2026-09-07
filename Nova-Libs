@@ -73,7 +73,8 @@ local function mkDraggable(frame, handle)
     handle = handle or frame
     local dragging, dragInput, dragStart, startPos
     handle.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or
+           input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
             startPos = frame.Position
@@ -83,7 +84,8 @@ local function mkDraggable(frame, handle)
         end
     end)
     handle.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement then
+        if input.UserInputType == Enum.UserInputType.MouseMovement or
+           input.UserInputType == Enum.UserInputType.Touch then
             dragInput = input
         end
     end)
@@ -133,7 +135,6 @@ function NovaLibs:CreateWindow(opts)
     mkStroke(OpenBtn, C.accent, 1.5)
     OpenBtn.Parent = ScreenGui
 
-    -- Dot accent kiri
     local Dot = Instance.new("Frame")
     Dot.BackgroundColor3 = C.accent
     Dot.Size = UDim2.fromOffset(6, 6)
@@ -143,7 +144,6 @@ function NovaLibs:CreateWindow(opts)
     mkCorner(Dot, 50)
     Dot.Parent = OpenBtn
 
-    -- Animasi OpenBtn masuk
     local function showOpenBtn()
         OpenBtn.Visible = true
         OpenBtn.Size = UDim2.fromOffset(0, 36)
@@ -203,7 +203,6 @@ function NovaLibs:CreateWindow(opts)
         SubLbl.Parent = TopBar
     end
 
-    -- Tombol kanan topbar (X Close + ^ Minimize) kayak rayfield
     local BtnFrame = Instance.new("Frame")
     BtnFrame.BackgroundTransparency = 1
     BtnFrame.Size = UDim2.fromOffset(140, 30)
@@ -213,7 +212,6 @@ function NovaLibs:CreateWindow(opts)
     BtnFrame.Parent = TopBar
     mkList(BtnFrame, Enum.FillDirection.Horizontal, 6)
 
-    -- Minimize button
     local MinBtn = Instance.new("TextButton")
     MinBtn.BackgroundColor3 = C.element2
     MinBtn.Size = UDim2.fromOffset(60, 26)
@@ -225,7 +223,6 @@ function NovaLibs:CreateWindow(opts)
     mkCorner(MinBtn, 6)
     MinBtn.Parent = BtnFrame
 
-    -- Close button
     local CloseBtn = Instance.new("TextButton")
     CloseBtn.BackgroundColor3 = C.danger
     CloseBtn.Size = UDim2.fromOffset(60, 26)
@@ -237,7 +234,6 @@ function NovaLibs:CreateWindow(opts)
     mkCorner(CloseBtn, 6)
     CloseBtn.Parent = BtnFrame
 
-    -- Close: sembunyiin GUI, munculin OpenBtn dengan animasi
     CloseBtn.MouseButton1Click:Connect(function()
         tween(Main, {Size = UDim2.fromOffset(width, 0), BackgroundTransparency = 1}, 0.25)
         task.wait(0.26)
@@ -247,7 +243,6 @@ function NovaLibs:CreateWindow(opts)
         showOpenBtn()
     end)
 
-    -- Open: sembunyiin OpenBtn, munculin GUI dengan animasi
     OpenBtn.MouseButton1Click:Connect(function()
         OpenBtn.Visible = false
         Main.Visible = true
@@ -256,7 +251,6 @@ function NovaLibs:CreateWindow(opts)
         tween(Main, {Size = UDim2.fromOffset(width, height), BackgroundTransparency = 0}, 0.25)
     end)
 
-    -- Minimize
     local minimized = false
     MinBtn.MouseButton1Click:Connect(function()
         minimized = not minimized
@@ -564,13 +558,22 @@ function Tab:CreateSection(sname)
             end
 
             Track.InputBegan:Connect(function(inp)
-                if inp.UserInputType == Enum.UserInputType.MouseButton1 then drag = true; upd(inp) end
+                if inp.UserInputType == Enum.UserInputType.MouseButton1 or
+                   inp.UserInputType == Enum.UserInputType.Touch then
+                    drag = true; upd(inp)
+                end
             end)
             UserInputService.InputChanged:Connect(function(inp)
-                if drag and inp.UserInputType == Enum.UserInputType.MouseMovement then upd(inp) end
+                if drag and (inp.UserInputType == Enum.UserInputType.MouseMovement or
+                   inp.UserInputType == Enum.UserInputType.Touch) then
+                    upd(inp)
+                end
             end)
             UserInputService.InputEnded:Connect(function(inp)
-                if inp.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
+                if inp.UserInputType == Enum.UserInputType.MouseButton1 or
+                   inp.UserInputType == Enum.UserInputType.Touch then
+                    drag = false
+                end
             end)
 
             local obj = {}
