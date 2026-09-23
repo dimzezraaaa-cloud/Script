@@ -1,1 +1,335 @@
-Okok
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Script to GitHub</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh;padding:2rem 1rem;display:flex;justify-content:center}
+.wrap{width:100%;max-width:600px}
+.hdr{display:flex;align-items:center;gap:12px;margin-bottom:1.75rem}
+.hdr h1{font-size:18px;font-weight:600}
+.hdr p{font-size:13px;color:#8b949e;margin-top:2px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1.25rem 1.5rem;margin-bottom:1rem}
+.ct{font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.8px;margin-bottom:1rem}
+label{display:block;font-size:13px;color:#8b949e;margin-bottom:5px}
+input,textarea{width:100%;background:#0d1117;border:1px solid #30363d;border-radius:8px;color:#e6edf3;font-size:14px;padding:9px 12px;outline:none;transition:border-color .15s;font-family:inherit}
+input:focus,textarea:focus{border-color:#388bfd;box-shadow:0 0 0 3px rgba(56,139,253,.1)}
+input::placeholder,textarea::placeholder{color:#484f58}
+textarea{resize:vertical;min-height:240px;font-family:'SFMono-Regular',Consolas,monospace;font-size:13px;line-height:1.6}
+.field{margin-bottom:.9rem}.field:last-child{margin-bottom:0}
+.irow{display:grid;grid-template-columns:1fr auto;gap:8px}
+.btn{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;border:none;transition:all .15s;white-space:nowrap}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.bg{background:transparent;color:#8b949e;border:1px solid #30363d}
+.bg:hover:not(:disabled){background:#21262d;color:#e6edf3}
+.bp{background:#238636;color:#fff;width:100%;justify-content:center;padding:11px}
+.bp:hover:not(:disabled){background:#2ea043}
+.sm{padding:6px 12px;font-size:12px}
+.tsaved{display:flex;align-items:center;justify-content:space-between;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:9px 12px}
+.tsaved span{font-size:13px;color:#3fb950}
+.tsaved button{background:transparent;border:none;color:#8b949e;font-size:12px;cursor:pointer;padding:2px 8px;border-radius:4px}
+.tsaved button:hover{color:#e6edf3;background:#21262d}
+.repo-saved{display:flex;align-items:center;justify-content:space-between;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:9px 12px}
+.repo-saved .rname{font-size:13px;color:#e6edf3;font-family:'SFMono-Regular',Consolas,monospace}
+.repo-saved .rbadge{font-size:11px;color:#3fb950;margin-left:6px}
+.repo-actions{display:flex;gap:4px}
+.repo-actions button{background:transparent;border:none;font-size:12px;cursor:pointer;padding:2px 8px;border-radius:4px}
+.btn-clear{color:#f85149}.btn-clear:hover{background:rgba(248,81,73,.1)}
+.btn-change{color:#8b949e}.btn-change:hover{color:#e6edf3;background:#21262d}
+.tabs{display:flex;border:1px solid #30363d;border-radius:8px;overflow:hidden;margin-bottom:1rem}
+.tab{flex:1;padding:8px;text-align:center;font-size:13px;cursor:pointer;background:transparent;color:#8b949e;border:none;transition:all .15s}
+.tab.active{background:#21262d;color:#e6edf3;font-weight:500}
+.tab:hover:not(.active){color:#e6edf3}
+.drop{border:1.5px dashed #30363d;border-radius:8px;padding:2rem 1rem;text-align:center;cursor:pointer;transition:all .15s;position:relative}
+.drop:hover,.drop.over{border-color:#388bfd;background:rgba(56,139,253,.05)}
+.drop input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.drop-icon{font-size:28px;margin-bottom:6px}
+.drop p{font-size:13px;color:#8b949e;margin-top:4px}
+/* File preview box */
+.file-preview{background:#f6f8fa;border:1px solid #d0d7de;border-radius:10px;padding:16px 18px;display:flex;align-items:center;gap:14px}
+.file-icon{width:44px;height:44px;background:#fff;border:1px solid #d0d7de;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.file-info{flex:1;min-width:0}
+.file-name{font-size:14px;font-weight:600;color:#1f2328;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-size{font-size:12px;color:#57606a;margin-top:2px}
+.file-remove{background:transparent;border:1px solid #d0d7de;border-radius:6px;padding:5px 10px;font-size:12px;color:#57606a;cursor:pointer;flex-shrink:0;transition:all .15s}
+.file-remove:hover{background:#fff;color:#cf222e;border-color:#cf222e}
+.sz{font-size:12px;color:#484f58;text-align:right;margin-top:6px;min-height:16px}
+.toast{padding:11px 14px;border-radius:8px;font-size:13px;display:none;align-items:center;gap:9px;margin-top:.75rem}
+.toast.show{display:flex}
+.tok{background:rgba(35,134,54,.12);border:1px solid #238636;color:#3fb950}
+.ter{background:rgba(248,81,73,.08);border:1px solid #da3633;color:#f85149}
+.tin{background:rgba(56,139,253,.08);border:1px solid #1f6feb;color:#79c0ff}
+.spin{width:13px;height:13px;border:2px solid transparent;border-top-color:currentColor;border-radius:50%;animation:rot .6s linear infinite;flex-shrink:0}
+@keyframes rot{to{transform:rotate(360deg)}}
+a.lnk{color:#388bfd;font-size:12px;text-decoration:none}
+a.lnk:hover{text-decoration:underline}
+.url-box{display:none;margin-top:.75rem;background:#0d1117;border:1px solid #238636;border-radius:10px;padding:12px 14px}
+.url-box.show{display:block}
+.url-label{font-size:11px;color:#3fb950;font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.url-row{display:flex;gap:8px;align-items:center}
+.url-text{flex:1;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 10px;font-family:'SFMono-Regular',Consolas,monospace;font-size:12px;color:#79c0ff;word-break:break-all;cursor:pointer;transition:border-color .15s}
+.url-text:hover{border-color:#388bfd}
+.url-btns{display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.ubtn{padding:6px 12px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;border:none;transition:all .15s;white-space:nowrap}
+.ubtn-copy{background:#21262d;color:#e6edf3;border:1px solid #30363d}
+.ubtn-copy:hover{background:#30363d}
+.ubtn-open{background:#1f6feb;color:#fff}
+.ubtn-open:hover{background:#388bfd}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="hdr">
+  <img src="data:image/png;base64,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" width="36" height="36" style="border-radius:8px;flex-shrink:0">
+  <div><h1>Script to GitHub</h1><p>Push files directly to your repo</p></div>
+</div>
+
+<!-- TOKEN -->
+<div class="card">
+  <div class="ct">🔑 GitHub Token</div>
+  <div id="tf" class="field">
+    <div class="irow">
+      <input type="password" id="ti" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+      <button class="btn bg sm" onclick="saveT()">Save</button>
+    </div>
+    <div style="margin-top:8px"><a class="lnk" href="https://github.com/settings/tokens/new?scopes=repo&description=Script-To-GitHub" target="_blank">Don't have a token? Generate one here →</a></div>
+  </div>
+  <div id="ts" style="display:none">
+    <div class="tsaved"><span>✓ Token saved</span><button onclick="resetT()">Change</button></div>
+  </div>
+</div>
+
+<!-- TARGET -->
+<div class="card">
+  <div class="ct">📁 Target</div>
+  <div id="repo-field" class="field">
+    <label>Repository</label>
+    <div class="irow">
+      <input type="text" id="repo" placeholder="username/repo-name" autocomplete="off">
+      <button class="btn bg sm" onclick="saveRepo()">Save</button>
+    </div>
+  </div>
+  <div id="repo-saved" style="display:none" class="field">
+    <label>Repository</label>
+    <div class="repo-saved">
+      <div><span class="rname" id="repo-display"></span><span class="rbadge">saved</span></div>
+      <div class="repo-actions">
+        <button class="btn-clear" onclick="clearRepo()">✕ Clear</button>
+        <button class="btn-change" onclick="changeRepo()">Change</button>
+      </div>
+    </div>
+  </div>
+  <div class="field"><label>File Name</label><input type="text" id="fname" placeholder="script.js" autocomplete="off"></div>
+</div>
+
+<!-- CONTENT -->
+<div class="card">
+  <div class="ct">📄 Content</div>
+  <div class="tabs">
+    <button class="tab active" id="tbc" onclick="sw('code')">Paste / Type</button>
+    <button class="tab" id="tbf" onclick="sw('file')">Upload File</button>
+  </div>
+
+  <!-- Code tab -->
+  <div id="pc">
+    <textarea id="code" placeholder="// Your code here..." oninput="us()"></textarea>
+    <div class="sz" id="si"></div>
+  </div>
+
+  <!-- File tab -->
+  <div id="pf" style="display:none">
+    <!-- Drop zone (shown when no file selected) -->
+    <div id="dz" class="drop" ondragover="od(event,true)" ondragleave="od(event,false)" ondrop="odr(event)">
+      <input type="file" id="fi" onchange="onPick(event)">
+      <div class="drop-icon">📂</div>
+      <p>Click or drag &amp; drop a file here</p>
+    </div>
+    <!-- File preview (shown after file selected) -->
+    <div id="fp" style="display:none">
+      <div class="file-preview">
+        <div class="file-icon" id="fi-icon">📄</div>
+        <div class="file-info">
+          <div class="file-name" id="fi-name">-</div>
+          <div class="file-size" id="fi-size">-</div>
+        </div>
+        <button class="file-remove" onclick="removeFile()">Remove</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<button class="btn bp" id="pb" onclick="push()">
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14zm5.25-9.72-2.22 2.22a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734L7.75 3.22a.75.75 0 0 1 1.06 0l3.03 3.03a.75.75 0 1 1-1.06 1.06L8.5 5.06v6.69a.75.75 0 0 1-1.5 0V5.06z"/></svg>
+  Push to GitHub
+</button>
+
+<div class="toast" id="t"><div class="spin" id="sp" style="display:none"></div><span id="tm"></span></div>
+
+<div class="url-box" id="url-box">
+  <div class="url-label">✓ Raw URL</div>
+  <div class="url-row">
+    <div class="url-text" id="raw-url" onclick="copyUrl()"></div>
+    <div class="url-btns">
+      <button class="ubtn ubtn-copy" id="copy-btn" onclick="copyUrl()">Copy</button>
+      <button class="ubtn ubtn-open" onclick="openRaw()">Open Raw</button>
+    </div>
+  </div>
+</div>
+
+</div>
+<script>
+const G=id=>document.getElementById(id);
+const ls=localStorage;
+let lastRawUrl='';
+let selectedFile=null;
+let activeTab='code';
+
+// TOKEN
+function initT(){const t=ls.getItem('gh_t');G('tf').style.display=t?'none':'block';G('ts').style.display=t?'block':'none';}
+function saveT(){const v=G('ti').value.trim();if(!v){nt('Token is empty','ter');return;}ls.setItem('gh_t',v);G('ti').value='';initT();}
+function resetT(){ls.removeItem('gh_t');initT();}
+
+// REPO
+function initRepo(){
+  const r=ls.getItem('gh_repo');
+  if(r){G('repo').value=r;G('repo-display').textContent=r;G('repo-field').style.display='none';G('repo-saved').style.display='block';}
+  else{G('repo-field').style.display='block';G('repo-saved').style.display='none';}
+}
+function saveRepo(){
+  const v=G('repo').value.trim();
+  if(!v){nt('Enter a repo first','ter');return;}
+  const pts=v.split('/');
+  if(pts.length!==2||!pts[0]||!pts[1]){nt('Format: username/repo-name','ter');return;}
+  ls.setItem('gh_repo',v);G('repo-display').textContent=v;
+  G('repo-field').style.display='none';G('repo-saved').style.display='block';
+}
+function clearRepo(){ls.removeItem('gh_repo');G('repo').value='';G('repo-field').style.display='block';G('repo-saved').style.display='none';}
+function changeRepo(){G('repo-field').style.display='block';G('repo-saved').style.display='none';G('repo').focus();}
+
+// TABS
+function sw(tab){
+  activeTab=tab;
+  G('pc').style.display=tab==='code'?'block':'none';
+  G('pf').style.display=tab==='file'?'block':'none';
+  G('tbc').classList.toggle('active',tab==='code');
+  G('tbf').classList.toggle('active',tab==='file');
+}
+
+// FILE — no text reading, store as File object only
+function od(e,v){e.preventDefault();G('dz').classList.toggle('over',v);}
+function odr(e){e.preventDefault();od(e,false);handleFile(e.dataTransfer.files[0]);}
+function onPick(e){handleFile(e.target.files[0]);}
+
+function handleFile(f){
+  if(!f)return;
+  selectedFile=f;
+  // Auto-fill filename if empty
+  if(!G('fname').value) G('fname').value=f.name;
+  // Show preview box, hide drop zone
+  G('dz').style.display='none';
+  G('fp').style.display='block';
+  // File icon by extension
+  const ext=f.name.split('.').pop().toLowerCase();
+  const icons={js:'🟨',ts:'🔷',py:'🐍',html:'🌐',css:'🎨',json:'📋',md:'📝',txt:'📝',sh:'⚡',php:'🐘',java:'☕',go:'🐹',rs:'🦀',rb:'💎',sql:'🗄️',zip:'📦',png:'🖼️',jpg:'🖼️',gif:'🖼️'};
+  G('fi-icon').textContent=icons[ext]||'📄';
+  G('fi-name').textContent=f.name;
+  G('fi-size').textContent=f.size<1024?f.size+' B':f.size<1048576?(f.size/1024).toFixed(1)+' KB':(f.size/1048576).toFixed(2)+' MB';
+}
+
+function removeFile(){
+  selectedFile=null;
+  G('fi').value='';
+  G('dz').style.display='block';
+  G('fp').style.display='none';
+}
+
+function us(){const b=new Blob([G('code').value]).size;G('si').textContent=b>0?(b/1024).toFixed(1)+' KB':'';}
+
+// TOAST
+function nt(msg,cls,spin=false){const t=G('t');t.className='toast show '+cls;G('tm').textContent=msg;G('sp').style.display=spin?'block':'none';}
+
+// RAW URL
+function showRawUrl(owner,repo,branch,filename){
+  lastRawUrl=`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filename}`;
+  G('raw-url').textContent=lastRawUrl;G('url-box').classList.add('show');
+}
+function copyUrl(){navigator.clipboard.writeText(lastRawUrl).then(()=>{G('copy-btn').textContent='Copied!';setTimeout(()=>G('copy-btn').textContent='Copy',1500);});}
+function openRaw(){if(lastRawUrl)window.open(lastRawUrl,'_blank');}
+
+// Read file as base64 (binary safe — no text conversion)
+function fileToBase64(file){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=ev=>{
+      const b64=ev.target.result.split(',')[1];
+      res(b64);
+    };
+    r.onerror=rej;
+    r.readAsDataURL(file);
+  });
+}
+
+// PUSH
+async function push(){
+  const tok=ls.getItem('gh_t');
+  if(!tok){nt('Save your token first','ter');return;}
+  const repoVal=ls.getItem('gh_repo')||G('repo').value.trim();
+  const fn=G('fname').value.trim();
+  const pts=repoVal.split('/');
+  if(pts.length!==2||!pts[0]||!pts[1]){nt('Repo format: username/repo-name','ter');return;}
+  if(!fn){nt('Enter a file name','ter');return;}
+
+  // Determine content source
+  let b64content='';
+  if(activeTab==='file'){
+    if(!selectedFile){nt('No file selected','ter');return;}
+    b64content=await fileToBase64(selectedFile);
+  } else {
+    const ct=G('code').value;
+    if(!ct){nt('Content is empty','ter');return;}
+    b64content=btoa(unescape(encodeURIComponent(ct)));
+  }
+
+  const[ow,rp]=pts,btn=G('pb');
+  btn.disabled=true;
+  G('url-box').classList.remove('show');
+  nt('Checking repo...','tin',true);
+
+  const url=`https://api.github.com/repos/${ow}/${rp}/contents/${fn}`;
+  const hdr={'Authorization':'Bearer '+tok,'Content-Type':'application/json','Accept':'application/vnd.github+json'};
+  let sha=null,branch='main';
+  try{
+    const ri=await fetch(`https://api.github.com/repos/${ow}/${rp}`,{headers:hdr});
+    if(ri.ok){const di=await ri.json();branch=di.default_branch||'main';}
+    const r=await fetch(url,{headers:hdr});
+    if(r.status===200)sha=(await r.json()).sha;
+    else if(r.status===401){btn.disabled=false;nt('Token invalid or expired','ter');return;}
+    else if(r.status!==404){btn.disabled=false;nt('Error: '+r.status,'ter');return;}
+  }catch(e){btn.disabled=false;nt('Network error','ter');return;}
+
+  nt(sha?'Updating file...':'Creating new file...','tin',true);
+  const body={message:'Upload via Script-To-GitHub',content:b64content};
+  if(sha)body.sha=sha;
+
+  try{
+    const res=await fetch(url,{method:'PUT',headers:hdr,body:JSON.stringify(body)});
+    const d=await res.json();
+    if(res.ok){
+      nt('✓ '+(sha?'Updated':'Uploaded')+' — '+fn,'tok');
+      showRawUrl(ow,rp,branch,fn);
+    }else{
+      let em=d.message||'Failed';
+      if(em.includes('Bad credentials'))em='Invalid token';
+      else if(em.includes('Not Found'))em='Repo not found or no access';
+      nt('✗ '+em,'ter');
+    }
+  }catch(e){nt('Error: '+e.message,'ter');}
+  finally{btn.disabled=false;}
+}
+
+window.onload=()=>{ initT(); initRepo(); };
+</script>
+</body>
+</html>
