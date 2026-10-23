@@ -1,0 +1,602 @@
+--[[
+	EVADE-STYLE MOVEMENT v2 (movement + animasi halus + tombol)
+	Tipe  : LocalScript
+	Taruh : StarterPlayer > StarterPlayerScripts
+	Lua   : sintaks Lua 5.1 murni (tanpa +=, continue, //, goto, type annotation)
+
+	Kontrol keyboard:
+	  Space (tahan)  : auto-bhop
+	  Ctrl / C       : slide
+	  Putar kamera + A/D di udara : air-strafe
+	  V              : nyalakan / matikan sistem
+
+	Tombol di layar (kanan, cocok untuk mobile):
+	  EVADE: ON/OFF  : toggle sistem
+	  HOP   (tahan)  : sama seperti tahan Space
+	  SLIDE (tahan)  : sama seperti tahan Ctrl
+
+	Animasi (semua di-smooth pakai damping, tanpa asset ID):
+	  - badan rebahan saat slide, condong ke depan saat speed tinggi
+	  - miring ke arah strafe saat di udara
+	  - FOV melebar sesuai speed, kamera turun halus saat slide
+	  Animasi pose hanya terlihat di sisi client sendiri (tidak direplikasi).
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+
+-- ====================== CONFIG ======================
+local CFG = {
+	WalkSpeed = 16,         -- speed jalan dasar
+	MaxSpeed = 70,          -- batas speed horizontal
+
+	AirCap = 2,             -- batas wishspeed di udara
+	AirAccel = 12,          -- akselerasi udara
+	BhopWindow = 0.12,      -- detik setelah mendarat, speed udara masih dibawa
+	JumpCooldown = 0.1,     -- anti double-jump
+	ForceFrames = 2,        -- frame setelah lompat, velocity horizontal dipaksa
+
+	SlideMinSpeed = 14,     -- speed minimal untuk mulai slide
+	SlideBoost = 1.12,      -- pengali speed saat mulai slide
+	SlideFriction = 10,     -- pengurang speed saat slide (studs/s^2)
+	SlideEndSpeed = 8,      -- slide selesai kalau speed <= ini
+	SlideCooldown = 0.35,   -- jeda sebelum bisa slide lagi
+	SlideHopKeep = 1.0,     -- pengali speed saat slide-hop
+	GroundGrace = 0.1,      -- toleransi detik tidak menyentuh tanah saat slide
+
+	-- animasi
+	SlideLeanDeg = 65,      -- derajat badan rebahan saat slide
+	SlideBodyDrop = -1.2,   -- badan turun saat slide (studs)
+	SlideCameraDrop = -1.5, -- kamera turun saat slide
+	LeanForwardDeg = 10,    -- condong ke depan di speed maksimum
+	StrafeRollDeg = 14,     -- miring ke samping saat air-strafe
+	PoseSmooth = 14,        -- kehalusan pose (makin besar = makin cepat)
+	CamSmooth = 12,         -- kehalusan kamera
+	UseFov = true,          -- false = jangan ubah FOV
+	FovBoost = 16,          -- tambahan FOV di speed maksimum
+	FovSmooth = 8,          -- kehalusan FOV
+}
+-- ====================================================
+
+local ZERO = Vector3.new(0, 0, 0)
+
+local S = {
+	enabled = true,
+	humanoid = nil,
+	airHoriz = ZERO,
+	airTime = 0,
+	lastGround = 0,
+	lastJump = 0,
+	forceFrames = 0,
+	forceHoriz = ZERO,
+	sliding = false,
+	slideDir = ZERO,
+	slideSpeed = 0,
+	slideCooldownUntil = 0,
+	savedWalk = nil,
+	btnJump = false,
+	btnSlide = false,
+	-- visual
+	motor = nil,
+	rootC0 = nil,
+	pitch = 0,
+	roll = 0,
+	poseY = 0,
+	camY = 0,
+	camWritten = false,
+	fovAdd = 0,
+	baseFov = nil,
+}
+
+-- ---------------------- util ----------------------
+local function clamp01(x)
+	if x < 0 then
+		return 0
+	end
+	if x > 1 then
+		return 1
+	end
+	return x
+end
+
+local function damp(current, target, rate, dt)
+	return current + (target - current) * (1 - math.exp(-rate * dt))
+end
+
+local function clampSpeed(h)
+	local mag = h.Magnitude
+	if mag > CFG.MaxSpeed then
+		return h.Unit * CFG.MaxSpeed
+	end
+	return h
+end
+
+local function airAccelerate(vel, wishDir, wishSpeed, accel, dt)
+	local current = vel:Dot(wishDir)
+	local add = math.min(wishSpeed, CFG.AirCap) - current
+	if add <= 0 then
+		return vel
+	end
+	local gain = math.min(accel * wishSpeed * dt, add)
+	return vel + wishDir * gain
+end
+
+local function jumpVelocity(humanoid)
+	if humanoid.UseJumpPower then
+		return humanoid.JumpPower
+	end
+	return math.sqrt(2 * workspace.Gravity * humanoid.JumpHeight)
+end
+
+-- ---------------------- slide / jump ----------------------
+local function endSlide(humanoid)
+	S.sliding = false
+	if humanoid and humanoid.Parent then
+		humanoid.WalkSpeed = S.savedWalk or CFG.WalkSpeed
+	end
+	S.savedWalk = nil
+end
+
+local function startSlide(humanoid, root, horiz)
+	S.sliding = true
+	S.slideDir = horiz.Unit
+	S.slideSpeed = math.min(horiz.Magnitude * CFG.SlideBoost, CFG.MaxSpeed)
+	if humanoid.WalkSpeed > 0 then
+		S.savedWalk = humanoid.WalkSpeed
+	else
+		S.savedWalk = CFG.WalkSpeed
+	end
+	humanoid.WalkSpeed = 0
+	local v = root.AssemblyLinearVelocity
+	local h = S.slideDir * S.slideSpeed
+	root.AssemblyLinearVelocity = Vector3.new(h.X, v.Y, h.Z)
+end
+
+local function doJump(humanoid, root, carry, now)
+	carry = clampSpeed(carry)
+	humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+	root.AssemblyLinearVelocity = Vector3.new(carry.X, jumpVelocity(humanoid), carry.Z)
+	S.forceHoriz = carry
+	S.forceFrames = CFG.ForceFrames
+	S.lastJump = now
+	S.airHoriz = carry
+	S.airTime = now
+end
+
+-- ---------------------- input ----------------------
+local function isTyping()
+	return UserInputService:GetFocusedTextBox() ~= nil
+end
+
+local function jumpHeld()
+	if S.btnJump then
+		return true
+	end
+	if isTyping() then
+		return false
+	end
+	return UserInputService:IsKeyDown(Enum.KeyCode.Space)
+		or UserInputService:IsGamepadButtonDown(Enum.UserInputType.Gamepad1, Enum.KeyCode.ButtonA)
+end
+
+local function crouchHeld()
+	if S.btnSlide then
+		return true
+	end
+	if isTyping() then
+		return false
+	end
+	return UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+		or UserInputService:IsKeyDown(Enum.KeyCode.C)
+end
+
+-- ---------------------- movement ----------------------
+local function movementStep(dt, humanoid, root)
+	if humanoid.Health <= 0 then
+		S.sliding = false
+		return
+	end
+
+	local hs = humanoid:GetState()
+	if hs == Enum.HumanoidStateType.Swimming
+		or hs == Enum.HumanoidStateType.Climbing
+		or hs == Enum.HumanoidStateType.Seated
+		or hs == Enum.HumanoidStateType.Dead then
+		if S.sliding then
+			endSlide(humanoid)
+		end
+		return
+	end
+
+	local now = os.clock()
+	local grounded = humanoid.FloorMaterial ~= Enum.Material.Air
+	if grounded then
+		S.lastGround = now
+	end
+
+	local vel = root.AssemblyLinearVelocity
+	local horiz = Vector3.new(vel.X, 0, vel.Z)
+
+	-- paksa velocity horizontal beberapa frame setelah lompat
+	if S.forceFrames > 0 and not S.sliding then
+		horiz = S.forceHoriz
+		root.AssemblyLinearVelocity = Vector3.new(horiz.X, vel.Y, horiz.Z)
+		vel = root.AssemblyLinearVelocity
+		S.forceFrames = S.forceFrames - 1
+	end
+
+	local md = humanoid.MoveDirection
+	local wish = Vector3.new(md.X, 0, md.Z)
+	local wishDir = nil
+	if wish.Magnitude > 0.001 then
+		wishDir = wish.Unit
+	end
+
+	local wantJump = jumpHeld()
+	local wantCrouch = crouchHeld()
+	local canJump = (now - S.lastJump) >= CFG.JumpCooldown
+
+	-- ================= SLIDE AKTIF =================
+	if S.sliding then
+		if grounded and wantJump and canJump then
+			local carry = S.slideDir * (S.slideSpeed * CFG.SlideHopKeep)
+			endSlide(humanoid)
+			S.slideCooldownUntil = now + CFG.SlideCooldown
+			doJump(humanoid, root, carry, now)
+			return
+		end
+
+		local offGround = (now - S.lastGround) > CFG.GroundGrace
+		if offGround or (not wantCrouch) or S.slideSpeed <= CFG.SlideEndSpeed then
+			local carry = S.slideDir * S.slideSpeed
+			endSlide(humanoid)
+			S.slideCooldownUntil = now + CFG.SlideCooldown
+			if not grounded then
+				root.AssemblyLinearVelocity = Vector3.new(carry.X, vel.Y, carry.Z)
+				S.airHoriz = carry
+				S.airTime = now
+			end
+			return
+		end
+
+		S.slideSpeed = math.max(S.slideSpeed - CFG.SlideFriction * dt, 0)
+		local h = S.slideDir * S.slideSpeed
+		root.AssemblyLinearVelocity = Vector3.new(h.X, vel.Y, h.Z)
+		return
+	end
+
+	-- ================= MULAI SLIDE =================
+	if grounded and wantCrouch and now >= S.slideCooldownUntil and horiz.Magnitude >= CFG.SlideMinSpeed then
+		startSlide(humanoid, root, horiz)
+		return
+	end
+
+	-- ================= AUTO-BHOP =================
+	if grounded and wantJump and canJump then
+		local carry = horiz
+		if (now - S.airTime) <= CFG.BhopWindow and S.airHoriz.Magnitude > horiz.Magnitude then
+			carry = S.airHoriz
+		end
+		doJump(humanoid, root, carry, now)
+		return
+	end
+
+	-- ================= AIR-STRAFE =================
+	if not grounded then
+		if wishDir then
+			horiz = airAccelerate(horiz, wishDir, CFG.WalkSpeed, CFG.AirAccel, dt)
+			horiz = clampSpeed(horiz)
+			root.AssemblyLinearVelocity = Vector3.new(horiz.X, vel.Y, horiz.Z)
+		end
+		S.airHoriz = horiz
+		S.airTime = now
+	end
+end
+
+-- ---------------------- animasi / visual ----------------------
+local function findRootMotor(char, root)
+	local lower = char:FindFirstChild("LowerTorso")
+	local m = nil
+	if lower then
+		m = lower:FindFirstChild("Root")
+	end
+	if not m then
+		m = root:FindFirstChild("RootJoint")
+	end
+	if m and m:IsA("Motor6D") and m.Part0 == root then
+		return m
+	end
+	return nil
+end
+
+local function updateVisuals(dt, humanoid, root)
+	local alive = S.enabled and humanoid.Health > 0
+
+	local vel = root.AssemblyLinearVelocity
+	local speed = Vector3.new(vel.X, 0, vel.Z).Magnitude
+	local grounded = humanoid.FloorMaterial ~= Enum.Material.Air
+
+	local tPitch = 0
+	local tRoll = 0
+	local tY = 0
+	local tCam = 0
+	local tFov = 0
+
+	if alive then
+		local boost = clamp01((speed - CFG.WalkSpeed) / (CFG.MaxSpeed - CFG.WalkSpeed))
+		tFov = boost * CFG.FovBoost
+		if S.sliding then
+			tPitch = math.rad(CFG.SlideLeanDeg)
+			tY = CFG.SlideBodyDrop
+			tCam = CFG.SlideCameraDrop
+		else
+			tPitch = -math.rad(CFG.LeanForwardDeg) * boost
+			if not grounded then
+				local md = humanoid.MoveDirection
+				local right = root.CFrame.RightVector
+				local lateral = md.X * right.X + md.Z * right.Z
+				tRoll = -lateral * math.rad(CFG.StrafeRollDeg)
+			end
+		end
+	end
+
+	-- pose badan (Motor6D root)
+	if (not S.motor) or (not S.motor.Parent) then
+		S.motor = findRootMotor(root.Parent, root)
+		if S.motor then
+			S.rootC0 = S.motor.C0
+		else
+			S.rootC0 = nil
+		end
+	end
+
+	S.pitch = damp(S.pitch, tPitch, CFG.PoseSmooth, dt)
+	S.roll = damp(S.roll, tRoll, CFG.PoseSmooth, dt)
+	S.poseY = damp(S.poseY, tY, CFG.PoseSmooth, dt)
+
+	if S.motor and S.rootC0 then
+		S.motor.C0 = CFrame.new(0, S.poseY, 0) * CFrame.Angles(S.pitch, 0, S.roll) * S.rootC0
+	end
+
+	-- kamera turun halus
+	S.camY = damp(S.camY, tCam, CFG.CamSmooth, dt)
+	if math.abs(S.camY) > 0.001 then
+		humanoid.CameraOffset = Vector3.new(0, S.camY, 0)
+		S.camWritten = true
+	elseif S.camWritten then
+		humanoid.CameraOffset = ZERO
+		S.camWritten = false
+	end
+
+	-- FOV halus
+	if CFG.UseFov then
+		local cam = workspace.CurrentCamera
+		if cam then
+			if not S.baseFov then
+				S.baseFov = cam.FieldOfView
+			end
+			S.fovAdd = damp(S.fovAdd, tFov, CFG.FovSmooth, dt)
+			cam.FieldOfView = S.baseFov + S.fovAdd
+		end
+	end
+end
+
+local function resetForCharacter(humanoid)
+	S.humanoid = humanoid
+	S.sliding = false
+	S.savedWalk = nil
+	S.forceFrames = 0
+	S.airHoriz = ZERO
+	S.lastJump = 0
+	S.slideCooldownUntil = 0
+	S.motor = nil
+	S.rootC0 = nil
+	S.pitch = 0
+	S.roll = 0
+	S.poseY = 0
+	S.camY = 0
+	S.camWritten = false
+end
+
+-- ---------------------- toggle ----------------------
+local uiRefresh = nil
+local releasers = {}
+
+local function releaseAllButtons()
+	for i = 1, #releasers do
+		releasers[i]()
+	end
+end
+
+local function setEnabled(value)
+	S.enabled = value
+	if not value then
+		if S.sliding and S.humanoid then
+			endSlide(S.humanoid)
+		end
+		S.forceFrames = 0
+		releaseAllButtons()
+	end
+	if uiRefresh then
+		uiRefresh()
+	end
+end
+
+-- ---------------------- tombol GUI ----------------------
+local COLOR_IDLE = Color3.fromRGB(28, 30, 38)
+local COLOR_PRESS = Color3.fromRGB(0, 170, 255)
+local COLOR_ON = Color3.fromRGB(40, 190, 115)
+local COLOR_OFF = Color3.fromRGB(205, 65, 65)
+local TWEEN_INFO = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+local function makeBaseButton(parent, name, text, size, position)
+	local b = Instance.new("TextButton")
+	b.Name = name
+	b.Text = text
+	b.Size = size
+	b.Position = position
+	b.AnchorPoint = Vector2.new(1, 0)
+	b.AutoButtonColor = false
+	b.BackgroundColor3 = COLOR_IDLE
+	b.BackgroundTransparency = 0.25
+	b.BorderSizePixel = 0
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 16
+	b.TextColor3 = Color3.new(1, 1, 1)
+	b.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 12)
+	corner.Parent = b
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.new(1, 1, 1)
+	stroke.Thickness = 1.5
+	stroke.Transparency = 0.6
+	stroke.Parent = b
+
+	local scale = Instance.new("UIScale")
+	scale.Scale = 1
+	scale.Parent = b
+
+	return b, scale
+end
+
+local function tweenPress(button, scale, pressed)
+	local goalScale = 1
+	local goalColor = COLOR_IDLE
+	if pressed then
+		goalScale = 0.9
+		goalColor = COLOR_PRESS
+	end
+	TweenService:Create(scale, TWEEN_INFO, { Scale = goalScale }):Play()
+	TweenService:Create(button, TWEEN_INFO, { BackgroundColor3 = goalColor }):Play()
+end
+
+local function makeHoldButton(parent, name, text, flagKey, position)
+	local b, scale = makeBaseButton(parent, name, text, UDim2.new(0, 76, 0, 76), position)
+	b.TextSize = 18
+	local held = nil
+
+	local function release()
+		if held ~= nil then
+			held = nil
+			S[flagKey] = false
+			tweenPress(b, scale, false)
+		end
+	end
+
+	b.InputBegan:Connect(function(input)
+		if held ~= nil then
+			return
+		end
+		local t = input.UserInputType
+		if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+			held = input
+			S[flagKey] = true
+			tweenPress(b, scale, true)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if held == nil then
+			return
+		end
+		local mouseUp = input.UserInputType == Enum.UserInputType.MouseButton1
+			and held.UserInputType == Enum.UserInputType.MouseButton1
+		if mouseUp or input == held then
+			release()
+		end
+	end)
+
+	releasers[#releasers + 1] = release
+	return b
+end
+
+local function buildGui()
+	local playerGui = player:WaitForChild("PlayerGui")
+	local old = playerGui:FindFirstChild("EvadeMovementGui")
+	if old then
+		old:Destroy()
+	end
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "EvadeMovementGui"
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 10
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	gui.Parent = playerGui
+
+	local toggle, toggleScale = makeBaseButton(
+		gui, "Toggle", "EVADE: ON",
+		UDim2.new(0, 96, 0, 34), UDim2.new(1, -12, 0.38, 0)
+	)
+	toggle.BackgroundColor3 = COLOR_ON
+
+	makeHoldButton(gui, "Hop", "HOP", "btnJump", UDim2.new(1, -12, 0.38, 44))
+	makeHoldButton(gui, "Slide", "SLIDE", "btnSlide", UDim2.new(1, -12, 0.38, 128))
+
+	uiRefresh = function()
+		local goal = COLOR_OFF
+		if S.enabled then
+			toggle.Text = "EVADE: ON"
+			goal = COLOR_ON
+		else
+			toggle.Text = "EVADE: OFF"
+		end
+		TweenService:Create(toggle, TWEEN_INFO, { BackgroundColor3 = goal }):Play()
+	end
+
+	toggle.Activated:Connect(function()
+		setEnabled(not S.enabled)
+		TweenService:Create(toggleScale, TweenInfo.new(0.08), { Scale = 0.94 }):Play()
+		task.delay(0.09, function()
+			TweenService:Create(toggleScale, TWEEN_INFO, { Scale = 1 }):Play()
+		end)
+	end)
+end
+
+buildGui()
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then
+		return
+	end
+	if input.KeyCode == Enum.KeyCode.V then
+		setEnabled(not S.enabled)
+	end
+end)
+
+UserInputService.WindowFocusReleased:Connect(releaseAllButtons)
+
+-- ---------------------- loop utama ----------------------
+local function step(dt)
+	if dt > 0.1 then
+		dt = 0.1
+	end
+
+	local char = player.Character
+	if not char then
+		return
+	end
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not root then
+		return
+	end
+
+	if humanoid ~= S.humanoid then
+		resetForCharacter(humanoid)
+	end
+
+	if S.enabled then
+		movementStep(dt, humanoid, root)
+	end
+	updateVisuals(dt, humanoid, root)
+end
+
+RunService.RenderStepped:Connect(step)
