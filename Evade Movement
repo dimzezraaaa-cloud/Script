@@ -1,0 +1,257 @@
+--[[
+	EVADE-STYLE MOVEMENT
+	Tipe  : LocalScript
+	Taruh : StarterPlayer > StarterPlayerScripts
+	Lua   : sintaks Lua 5.1 murni (tanpa +=, continue, //, goto, type annotation)
+
+	Fitur:
+	  1. Auto-bhop      : tahan Space, lompat otomatis tiap mendarat, speed kebawa
+	  2. Air-strafe     : putar kamera + A/D di udara = speed nambah (gaya Source)
+	  3. Slide          : tahan Ctrl / C, speed kebawa lalu turun pelan
+	  4. Slide-hop      : Space saat slide = lompat bawa speed slide
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+
+-- ====================== CONFIG ======================
+local CFG = {
+	WalkSpeed = 16,        -- speed jalan dasar
+	MaxSpeed = 70,         -- batas speed horizontal
+
+	AirCap = 2,            -- batas wishspeed di udara (makin kecil = strafe makin ketat)
+	AirAccel = 12,         -- akselerasi udara (makin besar = nambah speed makin cepat)
+	BhopWindow = 0.12,     -- detik setelah mendarat, speed udara masih dibawa
+	JumpCooldown = 0.1,    -- anti double-jump
+	ForceFrames = 2,       -- frame setelah lompat, velocity horizontal dipaksa
+
+	SlideMinSpeed = 14,    -- speed minimal untuk mulai slide
+	SlideBoost = 1.12,     -- pengali speed saat mulai slide
+	SlideFriction = 10,    -- studs/s^2 pengurang speed saat slide
+	SlideEndSpeed = 8,     -- slide selesai kalau speed <= ini
+	SlideCooldown = 0.35,  -- jeda sebelum bisa slide lagi
+	SlideHopKeep = 1.0,    -- pengali speed saat slide-hop
+	SlideCameraDrop = -1.5,-- kamera turun saat slide
+	GroundGrace = 0.1,     -- toleransi detik "tidak menyentuh tanah" saat slide
+}
+-- ====================================================
+
+local ZERO = Vector3.new(0, 0, 0)
+
+local S = {
+	humanoid = nil,
+	airHoriz = ZERO,
+	airTime = 0,
+	lastGround = 0,
+	lastJump = 0,
+	forceFrames = 0,
+	forceHoriz = ZERO,
+	sliding = false,
+	slideDir = ZERO,
+	slideSpeed = 0,
+	slideCooldownUntil = 0,
+}
+
+local function clampSpeed(h)
+	local mag = h.Magnitude
+	if mag > CFG.MaxSpeed then
+		return h.Unit * CFG.MaxSpeed
+	end
+	return h
+end
+
+local function airAccelerate(vel, wishDir, wishSpeed, accel, dt)
+	local current = vel:Dot(wishDir)
+	local add = math.min(wishSpeed, CFG.AirCap) - current
+	if add <= 0 then
+		return vel
+	end
+	local gain = math.min(accel * wishSpeed * dt, add)
+	return vel + wishDir * gain
+end
+
+local function jumpVelocity(humanoid)
+	if humanoid.UseJumpPower then
+		return humanoid.JumpPower
+	end
+	return math.sqrt(2 * workspace.Gravity * humanoid.JumpHeight)
+end
+
+local function endSlide(humanoid)
+	S.sliding = false
+	if humanoid and humanoid.Parent then
+		humanoid.WalkSpeed = CFG.WalkSpeed
+		humanoid.CameraOffset = ZERO
+	end
+end
+
+local function startSlide(humanoid, root, horiz)
+	S.sliding = true
+	S.slideDir = horiz.Unit
+	S.slideSpeed = math.min(horiz.Magnitude * CFG.SlideBoost, CFG.MaxSpeed)
+	humanoid.WalkSpeed = 0
+	humanoid.CameraOffset = Vector3.new(0, CFG.SlideCameraDrop, 0)
+	local v = root.AssemblyLinearVelocity
+	local h = S.slideDir * S.slideSpeed
+	root.AssemblyLinearVelocity = Vector3.new(h.X, v.Y, h.Z)
+end
+
+local function doJump(humanoid, root, carry, now)
+	carry = clampSpeed(carry)
+	humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+	root.AssemblyLinearVelocity = Vector3.new(carry.X, jumpVelocity(humanoid), carry.Z)
+	S.forceHoriz = carry
+	S.forceFrames = CFG.ForceFrames
+	S.lastJump = now
+	S.airHoriz = carry
+	S.airTime = now
+end
+
+local function isTyping()
+	return UserInputService:GetFocusedTextBox() ~= nil
+end
+
+local function jumpHeld()
+	if isTyping() then
+		return false
+	end
+	return UserInputService:IsKeyDown(Enum.KeyCode.Space)
+		or UserInputService:IsGamepadButtonDown(Enum.UserInputType.Gamepad1, Enum.KeyCode.ButtonA)
+end
+
+local function crouchHeld()
+	if isTyping() then
+		return false
+	end
+	return UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+		or UserInputService:IsKeyDown(Enum.KeyCode.C)
+end
+
+local function step(dt)
+	local char = player.Character
+	if not char then
+		return
+	end
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not root then
+		return
+	end
+
+	-- karakter baru -> reset semua state
+	if humanoid ~= S.humanoid then
+		S.humanoid = humanoid
+		S.sliding = false
+		S.forceFrames = 0
+		S.airHoriz = ZERO
+		S.lastJump = 0
+		S.slideCooldownUntil = 0
+		humanoid.WalkSpeed = CFG.WalkSpeed
+		humanoid.CameraOffset = ZERO
+	end
+
+	if humanoid.Health <= 0 then
+		S.sliding = false
+		return
+	end
+
+	local hs = humanoid:GetState()
+	if hs == Enum.HumanoidStateType.Swimming
+		or hs == Enum.HumanoidStateType.Climbing
+		or hs == Enum.HumanoidStateType.Seated
+		or hs == Enum.HumanoidStateType.Dead then
+		if S.sliding then
+			endSlide(humanoid)
+		end
+		return
+	end
+
+	local now = os.clock()
+	local grounded = humanoid.FloorMaterial ~= Enum.Material.Air
+	if grounded then
+		S.lastGround = now
+	end
+
+	local vel = root.AssemblyLinearVelocity
+	local horiz = Vector3.new(vel.X, 0, vel.Z)
+
+	-- paksa velocity horizontal beberapa frame setelah lompat (biar speed gak dibuang Humanoid)
+	if S.forceFrames > 0 and not S.sliding then
+		horiz = S.forceHoriz
+		root.AssemblyLinearVelocity = Vector3.new(horiz.X, vel.Y, horiz.Z)
+		vel = root.AssemblyLinearVelocity
+		S.forceFrames = S.forceFrames - 1
+	end
+
+	local md = humanoid.MoveDirection
+	local wish = Vector3.new(md.X, 0, md.Z)
+	local wishDir = nil
+	if wish.Magnitude > 0.001 then
+		wishDir = wish.Unit
+	end
+
+	local wantJump = jumpHeld()
+	local wantCrouch = crouchHeld()
+	local canJump = (now - S.lastJump) >= CFG.JumpCooldown
+
+	-- ================= SLIDE AKTIF =================
+	if S.sliding then
+		if grounded and wantJump and canJump then
+			local carry = S.slideDir * (S.slideSpeed * CFG.SlideHopKeep)
+			endSlide(humanoid)
+			S.slideCooldownUntil = now + CFG.SlideCooldown
+			doJump(humanoid, root, carry, now)
+			return
+		end
+
+		local offGround = (now - S.lastGround) > CFG.GroundGrace
+		if offGround or (not wantCrouch) or S.slideSpeed <= CFG.SlideEndSpeed then
+			local carry = S.slideDir * S.slideSpeed
+			endSlide(humanoid)
+			S.slideCooldownUntil = now + CFG.SlideCooldown
+			if not grounded then
+				root.AssemblyLinearVelocity = Vector3.new(carry.X, vel.Y, carry.Z)
+				S.airHoriz = carry
+				S.airTime = now
+			end
+			return
+		end
+
+		S.slideSpeed = math.max(S.slideSpeed - CFG.SlideFriction * dt, 0)
+		local h = S.slideDir * S.slideSpeed
+		root.AssemblyLinearVelocity = Vector3.new(h.X, vel.Y, h.Z)
+		return
+	end
+
+	-- ================= MULAI SLIDE =================
+	if grounded and wantCrouch and now >= S.slideCooldownUntil and horiz.Magnitude >= CFG.SlideMinSpeed then
+		startSlide(humanoid, root, horiz)
+		return
+	end
+
+	-- ================= AUTO-BHOP =================
+	if grounded and wantJump and canJump then
+		local carry = horiz
+		if (now - S.airTime) <= CFG.BhopWindow and S.airHoriz.Magnitude > horiz.Magnitude then
+			carry = S.airHoriz
+		end
+		doJump(humanoid, root, carry, now)
+		return
+	end
+
+	-- ================= AIR-STRAFE =================
+	if not grounded then
+		if wishDir then
+			horiz = airAccelerate(horiz, wishDir, CFG.WalkSpeed, CFG.AirAccel, dt)
+			horiz = clampSpeed(horiz)
+			root.AssemblyLinearVelocity = Vector3.new(horiz.X, vel.Y, horiz.Z)
+		end
+		S.airHoriz = horiz
+		S.airTime = now
+	end
+end
+
+RunService.RenderStepped:Connect(step)
