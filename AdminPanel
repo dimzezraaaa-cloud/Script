@@ -1,0 +1,1225 @@
+-- ADMIN INSTALLER (run ONCE in Command Bar) - Lua 5.1 - STUD style - no UICorner
+-- Creates: RemoteEvents (ReplicatedStorage), AdminServer (ServerScriptService), AdminMenu + AdminLogic (StarterGui)
+-- After running: open ServerScriptService > AdminServer and put your UserId in ADMINS.
+
+local ServerScriptService = game:GetService("ServerScriptService")
+local StarterGui = game:GetService("StarterGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- ================================================================
+-- SERVER SCRIPT SOURCE
+-- ================================================================
+local SERVER_SOURCE = [==[
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local MessagingService = game:GetService("MessagingService")
+
+-- ====== SETTINGS ======
+local ADMIN_ONLY = false      -- false = everyone (testing), true = only ADMINS
+local ADMINS = {
+	[123456789] = true,       -- your UserId
+}
+local CASH_NAME = "Cash"      -- leaderstats stat name
+local GLOBAL_TOPIC = "AdminGlobalAnnounce"
+-- ======================
+
+local function allowed(plr)
+	if not ADMIN_ONLY then
+		return true
+	end
+	return ADMINS[plr.UserId] == true
+end
+
+local NAMES = { "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc",
+	"Ud", "Dd", "Td", "Qad", "Qid", "Sxd", "Spd", "Ocd", "Nod", "Vg" }
+local SUFFIX = {}
+for i, name in ipairs(NAMES) do
+	SUFFIX[string.lower(name)] = 10 ^ (3 * i)
+end
+
+local function parseAmount(text)
+	local s = string.lower((string.gsub(text or "", "[%s,_]", "")))
+	if s == "" then
+		return nil
+	end
+	local n = tonumber(s)
+	if not n then
+		local num, suf = string.match(s, "^([%-%+]?[%d%.]+)(%a+)$")
+		local mult = suf and SUFFIX[suf]
+		if not mult then
+			return nil
+		end
+		n = tonumber(num)
+		if not n then
+			return nil
+		end
+		n = n * mult
+	end
+	if n ~= n or n == math.huge or n == -math.huge then
+		return nil
+	end
+	return n
+end
+
+local function short(n)
+	local sign = ""
+	if n < 0 then
+		sign = "-"
+		n = -n
+	end
+	if n < 1000 then
+		return sign .. tostring(math.floor(n * 100 + 0.5) / 100)
+	end
+	local i = math.floor(math.log10(n) / 3)
+	if i > #NAMES then
+		i = #NAMES
+	end
+	local v = n / (10 ^ (3 * i))
+	return sign .. tostring(math.floor(v * 100 + 0.5) / 100) .. NAMES[i]
+end
+
+local function str(x, max)
+	if type(x) ~= "string" then
+		return ""
+	end
+	return string.sub(x, 1, max)
+end
+
+local function findPlayer(caller, name)
+	name = string.lower(name or "")
+	if name == "" or name == "me" then
+		return caller
+	end
+	local found = nil
+	for _, p in ipairs(Players:GetPlayers()) do
+		local n = string.lower(p.Name)
+		local d = string.lower(p.DisplayName)
+		if n == name or d == name then
+			return p
+		end
+		if not found then
+			if string.find(n, name, 1, true) or string.find(d, name, 1, true) then
+				found = p
+			end
+		end
+	end
+	return found
+end
+
+local function getChar(p)
+	local ch = p.Character
+	if not ch then
+		return nil, nil
+	end
+	return ch:FindFirstChildOfClass("Humanoid"), ch:FindFirstChild("HumanoidRootPart")
+end
+
+local handlers = {}
+
+handlers.AdminKill = function(plr, a)
+	local target = findPlayer(plr, str(a, 50))
+	if not target then
+		return false, "Player not found"
+	end
+	local hum = getChar(target)
+	if not hum then
+		return false, "Character not ready"
+	end
+	hum.Health = 0
+	return true, "Killed " .. target.Name
+end
+
+handlers.AdminBring = function(plr, a)
+	local target = findPlayer(plr, str(a, 50))
+	if not target then
+		return false, "Player not found"
+	end
+	local _, aRoot = getChar(plr)
+	local _, tRoot = getChar(target)
+	if not aRoot or not tRoot then
+		return false, "Character not ready"
+	end
+	tRoot.CFrame = aRoot.CFrame * CFrame.new(0, 0, -5)
+	return true, "Brought " .. target.Name
+end
+
+handlers.AdminGoto = function(plr, a)
+	local target = findPlayer(plr, str(a, 50))
+	if not target then
+		return false, "Player not found"
+	end
+	local _, aRoot = getChar(plr)
+	local _, tRoot = getChar(target)
+	if not aRoot or not tRoot then
+		return false, "Character not ready"
+	end
+	aRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, 5)
+	return true, "Teleported to " .. target.Name
+end
+
+handlers.AdminCash = function(plr, a, b)
+	local target = findPlayer(plr, str(a, 50))
+	if not target then
+		return false, "Player not found"
+	end
+	local n = parseAmount(str(b, 40))
+	if not n then
+		return false, "Bad amount. Examples: 500, 1K, 2.5M, 1T, 1Sp"
+	end
+	local ls = target:FindFirstChild("leaderstats")
+	if not ls then
+		ls = Instance.new("Folder")
+		ls.Name = "leaderstats"
+		ls.Parent = target
+	end
+	local stat = ls:FindFirstChild(CASH_NAME)
+	if not stat then
+		stat = Instance.new("NumberValue")
+		stat.Name = CASH_NAME
+		stat.Parent = ls
+	end
+	local new = stat.Value + n
+	if stat:IsA("IntValue") and (new > 9e18 or new < -9e18) then
+		return false, CASH_NAME .. " is an IntValue (max ~9Qi). Use NumberValue for bigger"
+	end
+	stat.Value = new
+	return true, target.Name .. " " .. CASH_NAME .. " " .. short(n) .. " -> " .. short(stat.Value)
+end
+
+handlers.AdminKick = function(plr, a, b)
+	local name = str(a, 50)
+	if name == "" then
+		return false, "Enter a player name"
+	end
+	local target = findPlayer(plr, name)
+	if not target then
+		return false, "Player not found"
+	end
+	local reason = str(b, 100)
+	if reason == "" then
+		reason = "Kicked by admin"
+	end
+	local nm = target.Name
+	target:Kick(reason)
+	return true, "Kicked " .. nm
+end
+
+handlers.AdminBan = function(plr, a, b, c)
+	local name = str(a, 50)
+	if name == "" then
+		return false, "Enter a player name"
+	end
+	local reason = str(b, 100)
+	if reason == "" then
+		return false, "Reason required"
+	end
+	local days = tonumber(str(c, 10))
+	if not days or days < 0 then
+		days = 0
+	end
+
+	local userId = nil
+	local target = findPlayer(plr, name)
+	if target and string.lower(name) ~= "me" then
+		userId = target.UserId
+	else
+		local ok, id = pcall(function()
+			return Players:GetUserIdFromNameAsync(name)
+		end)
+		if ok then
+			userId = id
+		end
+	end
+	if not userId then
+		return false, "User not found"
+	end
+	if userId == plr.UserId then
+		return false, "You cannot ban yourself"
+	end
+
+	local duration = -1
+	if days > 0 then
+		duration = math.floor(days * 86400)
+	end
+
+	local ok, err = pcall(function()
+		Players:BanAsync({
+			UserIds = { userId },
+			Duration = duration,
+			DisplayReason = reason,
+			PrivateReason = reason .. " (by " .. plr.Name .. ")",
+			ExcludeAltAccounts = false,
+			ApplyToUniverse = true,
+		})
+	end)
+	if not ok then
+		return false, "Ban failed: " .. tostring(err)
+	end
+
+	if target and target.Parent then
+		target:Kick("Banned: " .. reason)
+	end
+
+	if days > 0 then
+		return true, "Banned " .. name .. " for " .. days .. " day(s)"
+	end
+	return true, "Banned " .. name .. " permanently"
+end
+
+local announceEvent = nil
+local subscribed = false
+
+local function showToAll(name, msg, userId)
+	if announceEvent then
+		announceEvent:FireAllClients("Show", name, msg, userId)
+	end
+end
+
+local function setupGlobal()
+	local ok = pcall(function()
+		MessagingService:SubscribeAsync(GLOBAL_TOPIC, function(message)
+			local d = message.Data
+			if type(d) == "table" then
+				showToAll(str(d.n, 50), str(d.m, 200), tonumber(d.u))
+			end
+		end)
+	end)
+	subscribed = ok
+	if not ok then
+		warn("[AdminServer] MessagingService unavailable: Global announce falls back to this server")
+	end
+end
+
+handlers.AdminAnnounce = function(plr, a, b)
+	local msg = str(a, 200)
+	if msg == "" then
+		return false, "Type an announcement first"
+	end
+	local scope = str(b, 10)
+
+	if scope == "Global" then
+		if subscribed then
+			local ok, err = pcall(function()
+				MessagingService:PublishAsync(GLOBAL_TOPIC, { n = plr.DisplayName, m = msg, u = plr.UserId })
+			end)
+			if ok then
+				return true, "Global announcement sent"
+			end
+			warn("[AdminServer] Publish failed: " .. tostring(err))
+		end
+		showToAll(plr.DisplayName, msg, plr.UserId)
+		return true, "Global unavailable. Sent to this server only"
+	end
+
+	showToAll(plr.DisplayName, msg, plr.UserId)
+	return true, "Server announcement sent"
+end
+
+local function hook(name)
+	local ev = ReplicatedStorage:WaitForChild(name, 10)
+	if not ev then
+		warn("[AdminServer] Missing RemoteEvent: " .. name)
+		return
+	end
+	if name == "AdminAnnounce" then
+		announceEvent = ev
+	end
+	ev.OnServerEvent:Connect(function(plr, a, b, c)
+		if not allowed(plr) then
+			ev:FireClient(plr, "Status", "Not allowed", false)
+			return
+		end
+		local success, ok, msg = pcall(handlers[name], plr, a, b, c)
+		if not success then
+			warn("[AdminServer] " .. name .. " error: " .. tostring(ok))
+			ev:FireClient(plr, "Status", "Server error", false)
+			return
+		end
+		ev:FireClient(plr, "Status", tostring(msg), ok == true)
+	end)
+end
+
+for name, _ in pairs(handlers) do
+	spawn(function()
+		hook(name)
+	end)
+end
+
+spawn(setupGlobal)
+]==]
+
+-- ================================================================
+-- LOCALSCRIPT SOURCE (GUI logic)
+-- ================================================================
+local CLIENT_SOURCE = [==[
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local gui = script.Parent
+
+local window = gui:WaitForChild("Window")
+local header = window:WaitForChild("Header")
+local closeBtn = header:WaitForChild("Close")
+local headerIcon = header:WaitForChild("HeaderIcon")
+local list = window:WaitForChild("PlayerList")
+local template = list:WaitForChild("RowTemplate")
+local status = window:WaitForChild("Status")
+local winStroke = window:FindFirstChildOfClass("UIStroke")
+
+local tabMain = window:WaitForChild("TabMain")
+local tabAnn = window:WaitForChild("TabAnnounce")
+local tabKB = window:WaitForChild("TabKickBan")
+local pageMain = window:WaitForChild("PageMain")
+local pageAnn = window:WaitForChild("PageAnnounce")
+local pageKB = window:WaitForChild("PageKickBan")
+
+local mainPlayer = pageMain:WaitForChild("PlayerBox")
+local mainValue = pageMain:WaitForChild("ValueBox")
+local annBox = pageAnn:WaitForChild("AnnounceBox")
+local scopeServer = pageAnn:WaitForChild("ScopeServer")
+local scopeGlobal = pageAnn:WaitForChild("ScopeGlobal")
+local kbPlayer = pageKB:WaitForChild("PlayerBox")
+local kbDays = pageKB:WaitForChild("DaysBox")
+local kbReason = pageKB:WaitForChild("ReasonBox")
+
+local banner = gui:WaitForChild("Banner")
+local bFace = banner:WaitForChild("Face")
+local bAvatar = bFace:WaitForChild("Avatar")
+local bFrom = bFace:WaitForChild("From")
+local bText = bFace:WaitForChild("Text")
+
+local vp = workspace.CurrentCamera.ViewportSize
+local fit = math.min(vp.X / 1050, vp.Y / 620)
+if fit < 0.52 then fit = 0.52 end
+if fit > 1.18 then fit = 1.18 end
+local winScale = window:WaitForChild("WindowScale")
+winScale.Scale = fit
+banner:WaitForChild("WindowScale").Scale = fit
+
+local CENTER = UDim2.new(0.5, 0, 0.5, 0)
+local BANNER_HIDDEN = UDim2.new(0.5, 0, 0, -140)
+local BANNER_SHOWN = UDim2.new(0.5, 0, 0, 16)
+
+window.Visible = false
+banner.Visible = false
+banner.Position = BANNER_HIDDEN
+template.Visible = false
+
+local function tween(obj, t, props, style, dir)
+	local info = TweenInfo.new(t, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out)
+	local tw = TweenService:Create(obj, info, props)
+	tw:Play()
+	return tw
+end
+
+local function setStatus(text, state)
+	if state == "ok" then
+		status.TextColor3 = Color3.fromRGB(140, 235, 90)
+	elseif state == "bad" then
+		status.TextColor3 = Color3.fromRGB(255, 110, 110)
+	else
+		status.TextColor3 = Color3.fromRGB(220, 220, 230)
+	end
+	status.Text = text
+end
+
+local function loadAvatar(imageLabel, userId)
+	spawn(function()
+		local ok, content = pcall(function()
+			return Players:GetUserThumbnailAsync(userId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
+		end)
+		if ok and content then
+			imageLabel.Image = content
+		end
+	end)
+end
+
+for _, d in ipairs(gui:GetDescendants()) do
+	if d:IsA("TextButton") then
+		local s = d:FindFirstChild("ButtonScale")
+		if s then
+			d.MouseEnter:Connect(function()
+				tween(s, 0.2, { Scale = 1.05 }, Enum.EasingStyle.Back)
+			end)
+			d.MouseLeave:Connect(function()
+				tween(s, 0.2, { Scale = 1 }, Enum.EasingStyle.Back)
+			end)
+			d.MouseButton1Down:Connect(function()
+				tween(s, 0.05, { Scale = 0.92 })
+			end)
+			d.MouseButton1Up:Connect(function()
+				tween(s, 0.2, { Scale = 1 }, Enum.EasingStyle.Back)
+			end)
+		end
+	end
+end
+
+TweenService:Create(headerIcon,
+	TweenInfo.new(1.1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+	{ Rotation = -3 }):Play()
+
+-- tabs
+local DIM = Color3.fromRGB(150, 150, 160)
+local WHITE = Color3.new(1, 1, 1)
+
+local tabs = { Main = tabMain, Announce = tabAnn, KickBan = tabKB }
+local pages = { Main = pageMain, Announce = pageAnn, KickBan = pageKB }
+local tabBase = {}
+for k, t in pairs(tabs) do
+	tabBase[k] = t.Position
+end
+
+local function selectTab(name)
+	for k, p in pairs(pages) do
+		p.Visible = (k == name)
+	end
+	for k, t in pairs(tabs) do
+		local b = tabBase[k]
+		if k == name then
+			tween(t.Face, 0.15, { BackgroundColor3 = WHITE })
+			tween(t, 0.15, { Position = UDim2.new(b.X.Scale, b.X.Offset, b.Y.Scale, b.Y.Offset - 4) })
+		else
+			tween(t.Face, 0.15, { BackgroundColor3 = DIM })
+			tween(t, 0.15, { Position = b })
+		end
+	end
+end
+
+tabMain.MouseButton1Click:Connect(function() selectTab("Main") end)
+tabAnn.MouseButton1Click:Connect(function() selectTab("Announce") end)
+tabKB.MouseButton1Click:Connect(function() selectTab("KickBan") end)
+selectTab("Main")
+
+-- announcement scope
+local scope = "Server"
+local function setScope(s)
+	scope = s
+	if s == "Server" then
+		tween(scopeServer.Face, 0.15, { BackgroundColor3 = WHITE })
+		tween(scopeGlobal.Face, 0.15, { BackgroundColor3 = DIM })
+	else
+		tween(scopeServer.Face, 0.15, { BackgroundColor3 = DIM })
+		tween(scopeGlobal.Face, 0.15, { BackgroundColor3 = WHITE })
+	end
+end
+scopeServer.MouseButton1Click:Connect(function() setScope("Server") end)
+scopeGlobal.MouseButton1Click:Connect(function() setScope("Global") end)
+setScope("Server")
+
+-- open / close
+local blur = Instance.new("BlurEffect")
+blur.Name = "AdminBlur"
+blur.Size = 0
+blur.Parent = Lighting
+
+local isOpen = false
+local busy = false
+
+local function setOpen(state)
+	if busy or state == isOpen then
+		return
+	end
+	busy = true
+	isOpen = state
+
+	if state then
+		winScale.Scale = fit * 0.7
+		window.Rotation = -6
+		window.Position = UDim2.new(0.5, 0, 0.5, 50)
+		window.BackgroundTransparency = 1
+		if winStroke then winStroke.Transparency = 1 end
+		header.Position = UDim2.new(0, 0, 0, -40)
+		window.Visible = true
+
+		tween(winScale, 0.42, { Scale = fit }, Enum.EasingStyle.Back)
+		tween(window, 0.42, { Rotation = 0, Position = CENTER }, Enum.EasingStyle.Back)
+		tween(window, 0.25, { BackgroundTransparency = 0.5 })
+		if winStroke then tween(winStroke, 0.25, { Transparency = 0.6 }) end
+		tween(blur, 0.3, { Size = 12 })
+
+		delay(0.06, function()
+			tween(header, 0.4, { Position = UDim2.new(0, 0, 0, 0) }, Enum.EasingStyle.Back)
+		end)
+		delay(0.45, function()
+			busy = false
+		end)
+	else
+		tween(winScale, 0.2, { Scale = fit * 0.8 }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+		tween(window, 0.2, { Rotation = 5, Position = UDim2.new(0.5, 0, 0.5, 40), BackgroundTransparency = 1 })
+		if winStroke then tween(winStroke, 0.2, { Transparency = 1 }) end
+		tween(header, 0.2, { Position = UDim2.new(0, 0, 0, -30) })
+		tween(blur, 0.2, { Size = 0 })
+		delay(0.2, function()
+			window.Visible = false
+			busy = false
+		end)
+	end
+end
+
+local function toggle()
+	setOpen(not isOpen)
+end
+
+closeBtn.MouseButton1Click:Connect(function()
+	setOpen(false)
+end)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed then
+		return
+	end
+	if input.KeyCode == Enum.KeyCode.P then
+		toggle()
+	end
+end)
+
+-- open button: uses AdminPanel > OpenPanel if you have it, otherwise creates its own
+local function hookOpen(obj)
+	local hooked = false
+	if obj:IsA("GuiButton") then
+		obj.Activated:Connect(toggle)
+		hooked = true
+	end
+	for _, d in ipairs(obj:GetDescendants()) do
+		if d:IsA("GuiButton") then
+			d.Activated:Connect(toggle)
+			hooked = true
+		end
+	end
+	if not hooked then
+		obj.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				toggle()
+			end
+		end)
+	end
+end
+
+local function makeOpenButton()
+	local function box(parent, size, pos, color)
+		local f = Instance.new("Frame")
+		f.Size = size
+		f.Position = pos
+		f.BackgroundColor3 = color
+		f.BorderSizePixel = 0
+		f.Parent = parent
+		return f
+	end
+
+	local btn = Instance.new("TextButton")
+	btn.Name = "Open"
+	btn.Text = ""
+	btn.AutoButtonColor = false
+	btn.AnchorPoint = Vector2.new(0, 0.5)
+	btn.Position = UDim2.new(0, 12, 0.5, 0)
+	btn.Size = UDim2.new(0, 210, 0, 54)
+	btn.BackgroundColor3 = Color3.fromRGB(38, 2, 10)
+	btn.BorderSizePixel = 0
+	btn.Parent = gui
+
+	local scale = Instance.new("UIScale")
+	scale.Parent = btn
+
+	box(btn, UDim2.new(1, -6, 1, -6), UDim2.new(0, 3, 0, 3), Color3.fromRGB(122, 10, 30))
+	local face = box(btn, UDim2.new(1, -6, 1, -12), UDim2.new(0, 3, 0, 3), Color3.new(1, 1, 1))
+	face.Name = "Face"
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(Color3.fromRGB(255, 96, 96), Color3.fromRGB(205, 32, 52))
+	g.Rotation = 90
+	g.Parent = face
+
+	local crown = Instance.new("ImageLabel")
+	crown.Name = "CrownIcon"
+	crown.BackgroundTransparency = 1
+	crown.Image = "rbxassetid://99075977473111"
+	crown.Size = UDim2.new(0, 46, 0, 46)
+	crown.Position = UDim2.new(0, 6, 0.5, 0)
+	crown.AnchorPoint = Vector2.new(0, 0.5)
+	crown.Rotation = -8
+	crown.ZIndex = 6
+	crown.Parent = face
+
+	local lbl = Instance.new("TextLabel")
+	lbl.Name = "Label"
+	lbl.BackgroundTransparency = 1
+	lbl.Position = UDim2.new(0, 58, 0, 0)
+	lbl.Size = UDim2.new(1, -66, 1, 0)
+	lbl.Font = Enum.Font.GothamBlack
+	lbl.Text = "ADMIN PANEL"
+	lbl.TextColor3 = Color3.new(1, 1, 1)
+	lbl.TextScaled = true
+	lbl.ZIndex = 5
+	lbl.Parent = face
+	local st = Instance.new("UIStroke")
+	st.Color = Color3.fromRGB(38, 2, 10)
+	st.Thickness = 3
+	st.Parent = lbl
+	local tc = Instance.new("UITextSizeConstraint")
+	tc.MaxTextSize = 20
+	tc.MinTextSize = 8
+	tc.Parent = lbl
+
+	btn.MouseEnter:Connect(function()
+		tween(scale, 0.2, { Scale = 1.05 }, Enum.EasingStyle.Back)
+	end)
+	btn.MouseLeave:Connect(function()
+		tween(scale, 0.2, { Scale = 1 }, Enum.EasingStyle.Back)
+	end)
+	btn.MouseButton1Down:Connect(function()
+		tween(scale, 0.05, { Scale = 0.92 })
+	end)
+	btn.MouseButton1Up:Connect(function()
+		tween(scale, 0.2, { Scale = 1 }, Enum.EasingStyle.Back)
+	end)
+	btn.MouseButton1Click:Connect(function()
+		crown.Rotation = -8 - 360
+		tween(crown, 0.5, { Rotation = -8 }, Enum.EasingStyle.Back)
+		toggle()
+	end)
+end
+
+spawn(function()
+	local panelGui = playerGui:WaitForChild("AdminPanel", 5)
+	local openPanel = nil
+	if panelGui then
+		openPanel = panelGui:WaitForChild("OpenPanel", 5)
+	end
+	if openPanel then
+		hookOpen(openPanel)
+	else
+		makeOpenButton()
+	end
+end)
+
+-- player list
+local layout = list:FindFirstChildOfClass("UIListLayout")
+layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	list.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 8)
+end)
+
+local rows = {}
+
+local function addRow(p)
+	if rows[p] then
+		return
+	end
+	local r = template:Clone()
+	r.Name = p.Name
+	r.Visible = true
+	r.NameLabel.Text = p.DisplayName .. "  (@" .. p.Name .. ")"
+	loadAvatar(r.Avatar, p.UserId)
+	r.Parent = list
+	r.MouseButton1Click:Connect(function()
+		mainPlayer.Text = p.Name
+		kbPlayer.Text = p.Name
+		setStatus("Selected: " .. p.Name, nil)
+	end)
+	rows[p] = r
+end
+
+local function removeRow(p)
+	if rows[p] then
+		rows[p]:Destroy()
+		rows[p] = nil
+	end
+end
+
+for _, p in ipairs(Players:GetPlayers()) do
+	addRow(p)
+end
+Players.PlayerAdded:Connect(addRow)
+Players.PlayerRemoving:Connect(removeRow)
+
+-- announcement banner
+local announceToken = 0
+local function showAnnouncement(sender, msg, userId)
+	announceToken = announceToken + 1
+	local my = announceToken
+	bFrom.Text = "ANNOUNCEMENT - " .. tostring(sender)
+	bText.Text = tostring(msg)
+	bAvatar.Image = ""
+	if userId then
+		loadAvatar(bAvatar, userId)
+	end
+	banner.Position = BANNER_HIDDEN
+	banner.Visible = true
+	tween(banner, 0.5, { Position = BANNER_SHOWN }, Enum.EasingStyle.Back)
+	delay(6, function()
+		if my == announceToken then
+			tween(banner, 0.3, { Position = BANNER_HIDDEN }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+			delay(0.3, function()
+				if my == announceToken then
+					banner.Visible = false
+				end
+			end)
+		end
+	end)
+end
+
+-- RemoteEvents (one per command)
+local EVENT_NAMES = { "AdminKick", "AdminBan", "AdminKill", "AdminBring", "AdminGoto", "AdminCash", "AdminAnnounce" }
+local events = {}
+
+for _, n in ipairs(EVENT_NAMES) do
+	spawn(function()
+		local e = ReplicatedStorage:WaitForChild(n, 10)
+		if not e then
+			warn("[AdminMenu] Missing RemoteEvent: " .. n)
+			return
+		end
+		events[n] = e
+		e.OnClientEvent:Connect(function(kind, a, b, c)
+			if kind == "Status" then
+				if b == true then
+					setStatus(tostring(a), "ok")
+				else
+					setStatus(tostring(a), "bad")
+				end
+			elseif kind == "Show" then
+				showAnnouncement(a, b, c)
+			end
+		end)
+	end)
+end
+
+local function fire(name, a, b, c)
+	local e = events[name]
+	if not e then
+		setStatus("Missing RemoteEvent: " .. name, "bad")
+		return
+	end
+	setStatus("Working...", nil)
+	e:FireServer(a, b, c)
+end
+
+pageMain:WaitForChild("Bring").MouseButton1Click:Connect(function()
+	fire("AdminBring", mainPlayer.Text)
+end)
+pageMain:WaitForChild("Goto").MouseButton1Click:Connect(function()
+	fire("AdminGoto", mainPlayer.Text)
+end)
+pageMain:WaitForChild("Kill").MouseButton1Click:Connect(function()
+	fire("AdminKill", mainPlayer.Text)
+end)
+pageMain:WaitForChild("Cash").MouseButton1Click:Connect(function()
+	fire("AdminCash", mainPlayer.Text, mainValue.Text)
+end)
+
+pageKB:WaitForChild("Kick").MouseButton1Click:Connect(function()
+	fire("AdminKick", kbPlayer.Text, kbReason.Text)
+end)
+pageKB:WaitForChild("Ban").MouseButton1Click:Connect(function()
+	if kbReason.Text == "" then
+		setStatus("Reason required", "bad")
+		return
+	end
+	fire("AdminBan", kbPlayer.Text, kbReason.Text, kbDays.Text)
+end)
+
+pageAnn:WaitForChild("Send").MouseButton1Click:Connect(function()
+	if annBox.Text == "" then
+		setStatus("Type an announcement first", "bad")
+		return
+	end
+	fire("AdminAnnounce", annBox.Text, scope)
+	annBox.Text = ""
+end)
+]==]
+
+-- ================================================================
+-- 1) REMOTE EVENTS (ReplicatedStorage)
+-- ================================================================
+local EVENT_LIST = { "AdminKick", "AdminBan", "AdminKill", "AdminBring", "AdminGoto", "AdminCash", "AdminAnnounce" }
+for _, n in ipairs(EVENT_LIST) do
+	if not ReplicatedStorage:FindFirstChild(n) then
+		local e = Instance.new("RemoteEvent")
+		e.Name = n
+		e.Parent = ReplicatedStorage
+	end
+end
+
+-- ================================================================
+-- 2) SERVER SCRIPT (ServerScriptService)
+-- ================================================================
+local oldServer = ServerScriptService:FindFirstChild("AdminServer")
+if oldServer then oldServer:Destroy() end
+local serverScript = Instance.new("Script")
+serverScript.Name = "AdminServer"
+serverScript.Source = SERVER_SOURCE
+serverScript.Parent = ServerScriptService
+
+-- ================================================================
+-- 3) GUI (StarterGui)
+-- ================================================================
+local ICON_CROWN = "rbxassetid://99075977473111"
+
+local oldGui = StarterGui:FindFirstChild("AdminMenu")
+if oldGui then oldGui:Destroy() end
+
+local THEMES = {
+	red = { top = Color3.fromRGB(255, 96, 96), bottom = Color3.fromRGB(205, 32, 52),
+		lip = Color3.fromRGB(122, 10, 30), outline = Color3.fromRGB(38, 2, 10) },
+	blue = { top = Color3.fromRGB(96, 176, 255), bottom = Color3.fromRGB(32, 102, 222),
+		lip = Color3.fromRGB(16, 56, 142), outline = Color3.fromRGB(2, 22, 40) },
+	green = { top = Color3.fromRGB(146, 232, 72), bottom = Color3.fromRGB(62, 172, 42),
+		lip = Color3.fromRGB(32, 102, 26), outline = Color3.fromRGB(26, 36, 2) },
+	purple = { top = Color3.fromRGB(190, 120, 255), bottom = Color3.fromRGB(120, 50, 210),
+		lip = Color3.fromRGB(70, 20, 130), outline = Color3.fromRGB(20, 5, 40) },
+	orange = { top = Color3.fromRGB(255, 190, 70), bottom = Color3.fromRGB(235, 120, 20),
+		lip = Color3.fromRGB(140, 70, 5), outline = Color3.fromRGB(40, 20, 2) },
+}
+
+local function stroke(parent, color, thickness, transparency)
+	local s = Instance.new("UIStroke")
+	s.Color = color
+	s.Thickness = thickness
+	s.Transparency = transparency or 0
+	s.Parent = parent
+	return s
+end
+
+local function gradient(parent, c1, c2)
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(c1, c2)
+	g.Rotation = 90
+	g.Parent = parent
+	return g
+end
+
+local function frame(parent, size, pos, color)
+	local f = Instance.new("Frame")
+	f.Size = size
+	f.Position = pos
+	f.BackgroundColor3 = color
+	f.BorderSizePixel = 0
+	f.Parent = parent
+	return f
+end
+
+local function fitText(obj, maxSize)
+	obj.TextScaled = true
+	obj.TextWrapped = true
+	local c = Instance.new("UITextSizeConstraint")
+	c.MaxTextSize = maxSize
+	c.MinTextSize = 8
+	c.Parent = obj
+end
+
+local function textLabel(parent, text, textSize, strokeColor)
+	local t = Instance.new("TextLabel")
+	t.Name = "Label"
+	t.BackgroundTransparency = 1
+	t.Size = UDim2.new(1, 0, 1, 0)
+	t.Font = Enum.Font.GothamBlack
+	t.Text = text
+	t.TextSize = textSize
+	t.TextColor3 = Color3.new(1, 1, 1)
+	t.ZIndex = 5
+	t.Parent = parent
+	stroke(t, strokeColor, 3)
+	return t
+end
+
+local function icon(parent, image, size, pos, anchor, rotation)
+	local i = Instance.new("ImageLabel")
+	i.Name = "Icon"
+	i.BackgroundTransparency = 1
+	i.Image = image
+	i.Size = size
+	i.Position = pos
+	i.AnchorPoint = anchor or Vector2.new(0.5, 0.5)
+	i.Rotation = rotation or 0
+	i.ScaleType = Enum.ScaleType.Fit
+	i.ZIndex = 6
+	i.Parent = parent
+	return i
+end
+
+local function studButton(parent, name, size, pos, anchor, themeName, text, textSize)
+	local th = THEMES[themeName]
+
+	local btn = Instance.new("TextButton")
+	btn.Name = name
+	btn.Text = ""
+	btn.AutoButtonColor = false
+	btn.Size = size
+	btn.Position = pos
+	btn.AnchorPoint = anchor
+	btn.BackgroundColor3 = th.outline
+	btn.BorderSizePixel = 0
+	btn.Parent = parent
+
+	local scale = Instance.new("UIScale")
+	scale.Name = "ButtonScale"
+	scale.Parent = btn
+
+	local lip = frame(btn, UDim2.new(1, -6, 1, -6), UDim2.new(0, 3, 0, 3), th.lip)
+	lip.Name = "Lip"
+
+	local face = frame(btn, UDim2.new(1, -6, 1, -12), UDim2.new(0, 3, 0, 3), Color3.new(1, 1, 1))
+	face.Name = "Face"
+	gradient(face, th.top, th.bottom)
+
+	local shine = frame(face, UDim2.new(1, 0, 0.42, 0), UDim2.new(0, 0, 0, 0), Color3.new(1, 1, 1))
+	shine.Name = "Shine"
+	shine.BackgroundTransparency = 0.82
+
+	for i = 1, 3 do
+		local stud = frame(face, UDim2.new(0, 9, 0, 9), UDim2.new(1, -12 - (i - 1) * 14, 1, -14), Color3.new(1, 1, 1))
+		stud.Name = "Stud" .. i
+		stud.BackgroundTransparency = 0.85
+	end
+
+	local label = textLabel(face, text, textSize or 22, th.outline)
+	fitText(label, textSize or 22)
+	return btn
+end
+
+local function inputBox(parent, name, placeholder, size, pos)
+	local box = Instance.new("TextBox")
+	box.Name = name
+	box.Size = size
+	box.Position = pos
+	box.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+	box.BackgroundTransparency = 0.15
+	box.BorderSizePixel = 0
+	box.Font = Enum.Font.GothamBold
+	box.TextSize = 20
+	box.TextColor3 = Color3.new(1, 1, 1)
+	box.PlaceholderText = placeholder
+	box.PlaceholderColor3 = Color3.fromRGB(150, 150, 160)
+	box.Text = ""
+	box.ClearTextOnFocus = false
+	box.Parent = parent
+	stroke(box, Color3.new(1, 1, 1), 2, 0.6)
+	return box
+end
+
+local function page(parent, name)
+	local f = Instance.new("Frame")
+	f.Name = name
+	f.BackgroundTransparency = 1
+	f.Position = UDim2.new(0, 19, 0, 222)
+	f.Size = UDim2.new(0, 502, 0, 214)
+	f.Parent = parent
+	return f
+end
+
+local ZERO = Vector2.new(0, 0)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "AdminMenu"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 50
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = StarterGui
+
+local window = Instance.new("Frame")
+window.Name = "Window"
+window.AnchorPoint = Vector2.new(0.5, 0.5)
+window.Position = UDim2.new(0.5, 0, 0.5, 0)
+window.Size = UDim2.new(0, 540, 0, 496)
+window.BackgroundColor3 = Color3.new(0, 0, 0)
+window.BackgroundTransparency = 0.5
+window.BorderSizePixel = 0
+window.Parent = gui
+stroke(window, Color3.new(1, 1, 1), 1, 0.6)
+
+local winScale = Instance.new("UIScale")
+winScale.Name = "WindowScale"
+winScale.Parent = window
+
+-- header
+local header = frame(window, UDim2.new(1, 0, 0, 58), UDim2.new(0, 0, 0, 0), Color3.new(1, 1, 1))
+header.Name = "Header"
+gradient(header, THEMES.red.top, THEMES.red.bottom)
+stroke(header, THEMES.red.outline, 3)
+local title = textLabel(header, "ADMIN PANEL", 30, THEMES.red.outline)
+title.Name = "Title"
+local headerIcon = icon(header, ICON_CROWN, UDim2.new(0, 84, 0, 84), UDim2.new(0, -6, 0, -26), ZERO, -10)
+headerIcon.Name = "HeaderIcon"
+studButton(header, "Close", UDim2.new(0, 42, 0, 42), UDim2.new(1, -28, 0.5, 0), Vector2.new(0.5, 0.5), "blue", "X", 24)
+
+-- tabs
+studButton(window, "TabMain", UDim2.new(0, 160, 0, 40), UDim2.new(0, 19, 0, 66), ZERO, "blue", "MAIN", 20)
+studButton(window, "TabAnnounce", UDim2.new(0, 160, 0, 40), UDim2.new(0, 189, 0, 66), ZERO, "blue", "ANNOUNCEMENT", 20)
+studButton(window, "TabKickBan", UDim2.new(0, 162, 0, 40), UDim2.new(0, 359, 0, 66), ZERO, "blue", "KICK / BAN", 20)
+
+-- shared player list + hidden row template
+local list = Instance.new("ScrollingFrame")
+list.Name = "PlayerList"
+list.Position = UDim2.new(0, 19, 0, 114)
+list.Size = UDim2.new(0, 502, 0, 100)
+list.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+list.BackgroundTransparency = 0.35
+list.BorderSizePixel = 0
+list.ScrollBarThickness = 6
+list.CanvasSize = UDim2.new(0, 0, 0, 0)
+list.Parent = window
+stroke(list, Color3.new(1, 1, 1), 2, 0.6)
+
+local pad = Instance.new("UIPadding")
+pad.PaddingTop = UDim.new(0, 4)
+pad.PaddingLeft = UDim.new(0, 4)
+pad.PaddingRight = UDim.new(0, 8)
+pad.PaddingBottom = UDim.new(0, 4)
+pad.Parent = list
+
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0, 4)
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Parent = list
+
+local row = Instance.new("TextButton")
+row.Name = "RowTemplate"
+row.Text = ""
+row.AutoButtonColor = true
+row.Size = UDim2.new(1, 0, 0, 44)
+row.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+row.BackgroundTransparency = 0.2
+row.BorderSizePixel = 0
+row.Parent = list
+stroke(row, Color3.new(0, 0, 0), 2)
+
+local rowAvatar = Instance.new("ImageLabel")
+rowAvatar.Name = "Avatar"
+rowAvatar.Size = UDim2.new(0, 36, 0, 36)
+rowAvatar.Position = UDim2.new(0, 4, 0, 4)
+rowAvatar.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
+rowAvatar.BorderSizePixel = 0
+rowAvatar.Parent = row
+stroke(rowAvatar, Color3.new(0, 0, 0), 2)
+
+local rowName = Instance.new("TextLabel")
+rowName.Name = "NameLabel"
+rowName.BackgroundTransparency = 1
+rowName.Position = UDim2.new(0, 48, 0, 0)
+rowName.Size = UDim2.new(1, -56, 1, 0)
+rowName.Font = Enum.Font.GothamBold
+rowName.TextSize = 18
+rowName.TextXAlignment = Enum.TextXAlignment.Left
+rowName.TextColor3 = Color3.new(1, 1, 1)
+rowName.Text = "Player"
+rowName.Parent = row
+stroke(rowName, Color3.new(0, 0, 0), 2)
+
+-- page: MAIN
+local pMain = page(window, "PageMain")
+inputBox(pMain, "PlayerBox", "Player name (empty = me)", UDim2.new(0, 300, 0, 40), UDim2.new(0, 0, 0, 0))
+inputBox(pMain, "ValueBox", "Cash: 500, 1K, 1M, 1T, 1Sp", UDim2.new(0, 192, 0, 40), UDim2.new(0, 310, 0, 0))
+studButton(pMain, "Bring", UDim2.new(0, 118, 0, 56), UDim2.new(0, 0, 0, 52), ZERO, "blue", "BRING", 22)
+studButton(pMain, "Goto", UDim2.new(0, 118, 0, 56), UDim2.new(0, 128, 0, 52), ZERO, "blue", "GOTO", 22)
+studButton(pMain, "Kill", UDim2.new(0, 118, 0, 56), UDim2.new(0, 256, 0, 52), ZERO, "red", "KILL", 22)
+studButton(pMain, "Cash", UDim2.new(0, 118, 0, 56), UDim2.new(0, 384, 0, 52), ZERO, "green", "CASH", 22)
+
+-- page: ANNOUNCEMENT
+local pAnn = page(window, "PageAnnounce")
+local annBox = inputBox(pAnn, "AnnounceBox", "Type announcement...", UDim2.new(0, 502, 0, 56), UDim2.new(0, 0, 0, 0))
+fitText(annBox, 22)
+studButton(pAnn, "ScopeServer", UDim2.new(0, 150, 0, 56), UDim2.new(0, 0, 0, 70), ZERO, "blue", "SERVER", 22)
+studButton(pAnn, "ScopeGlobal", UDim2.new(0, 150, 0, 56), UDim2.new(0, 160, 0, 70), ZERO, "purple", "GLOBAL", 22)
+studButton(pAnn, "Send", UDim2.new(0, 182, 0, 56), UDim2.new(0, 320, 0, 70), ZERO, "orange", "SEND", 24)
+
+-- page: KICK / BAN
+local pKB = page(window, "PageKickBan")
+inputBox(pKB, "PlayerBox", "Player name", UDim2.new(0, 300, 0, 40), UDim2.new(0, 0, 0, 0))
+inputBox(pKB, "DaysBox", "Days (empty = permanent)", UDim2.new(0, 192, 0, 40), UDim2.new(0, 310, 0, 0))
+inputBox(pKB, "ReasonBox", "Reason", UDim2.new(0, 502, 0, 40), UDim2.new(0, 0, 0, 50))
+studButton(pKB, "Kick", UDim2.new(0, 246, 0, 56), UDim2.new(0, 0, 0, 104), ZERO, "orange", "KICK", 24)
+studButton(pKB, "Ban", UDim2.new(0, 246, 0, 56), UDim2.new(0, 256, 0, 104), ZERO, "red", "BAN", 24)
+
+-- status
+local status = Instance.new("TextLabel")
+status.Name = "Status"
+status.BackgroundTransparency = 1
+status.Size = UDim2.new(1, -38, 0, 40)
+status.Position = UDim2.new(0, 19, 1, -50)
+status.Font = Enum.Font.GothamBold
+status.TextSize = 20
+status.TextColor3 = Color3.fromRGB(220, 220, 230)
+status.Text = "Pick a player, then press a command"
+status.Parent = window
+fitText(status, 20)
+stroke(status, Color3.new(0, 0, 0), 2)
+
+-- announcement banner (avatar + name + text)
+local banner = Instance.new("Frame")
+banner.Name = "Banner"
+banner.AnchorPoint = Vector2.new(0.5, 0)
+banner.Position = UDim2.new(0.5, 0, 0, 16)
+banner.Size = UDim2.new(0, 540, 0, 100)
+banner.BackgroundColor3 = THEMES.orange.outline
+banner.BorderSizePixel = 0
+banner.ZIndex = 20
+banner.Parent = gui
+
+local bScale = Instance.new("UIScale")
+bScale.Name = "WindowScale"
+bScale.Parent = banner
+
+local bLip = frame(banner, UDim2.new(1, -6, 1, -6), UDim2.new(0, 3, 0, 3), THEMES.orange.lip)
+bLip.Name = "Lip"
+bLip.ZIndex = 20
+local bFace = frame(banner, UDim2.new(1, -6, 1, -12), UDim2.new(0, 3, 0, 3), Color3.new(1, 1, 1))
+bFace.Name = "Face"
+bFace.ZIndex = 21
+gradient(bFace, THEMES.orange.top, THEMES.orange.bottom)
+
+local bAvatar = Instance.new("ImageLabel")
+bAvatar.Name = "Avatar"
+bAvatar.Size = UDim2.new(0, 70, 0, 70)
+bAvatar.Position = UDim2.new(0, 10, 0.5, 0)
+bAvatar.AnchorPoint = Vector2.new(0, 0.5)
+bAvatar.BackgroundColor3 = THEMES.orange.outline
+bAvatar.BorderSizePixel = 0
+bAvatar.ZIndex = 22
+bAvatar.Parent = bFace
+stroke(bAvatar, THEMES.orange.outline, 3)
+
+local bFrom = Instance.new("TextLabel")
+bFrom.Name = "From"
+bFrom.BackgroundTransparency = 1
+bFrom.Size = UDim2.new(1, -100, 0, 22)
+bFrom.Position = UDim2.new(0, 90, 0, 4)
+bFrom.Font = Enum.Font.GothamBlack
+bFrom.TextSize = 18
+bFrom.TextXAlignment = Enum.TextXAlignment.Left
+bFrom.TextColor3 = Color3.fromRGB(255, 240, 160)
+bFrom.Text = "ANNOUNCEMENT"
+bFrom.ZIndex = 22
+bFrom.Parent = bFace
+fitText(bFrom, 18)
+stroke(bFrom, THEMES.orange.outline, 2)
+
+local bText = Instance.new("TextLabel")
+bText.Name = "Text"
+bText.BackgroundTransparency = 1
+bText.Size = UDim2.new(1, -100, 1, -32)
+bText.Position = UDim2.new(0, 90, 0, 28)
+bText.Font = Enum.Font.GothamBlack
+bText.TextSize = 22
+bText.TextXAlignment = Enum.TextXAlignment.Left
+bText.TextYAlignment = Enum.TextYAlignment.Top
+bText.TextColor3 = Color3.new(1, 1, 1)
+bText.Text = "Your announcement shows here"
+bText.ZIndex = 22
+bText.Parent = bFace
+fitText(bText, 22)
+stroke(bText, THEMES.orange.outline, 3)
+
+-- ================================================================
+-- 4) LOCALSCRIPT (inside the ScreenGui)
+-- ================================================================
+local logic = Instance.new("LocalScript")
+logic.Name = "AdminLogic"
+logic.Source = CLIENT_SOURCE
+logic.Parent = gui
+
+print("Admin installed: RemoteEvents + AdminServer + AdminMenu(AdminLogic). Set your UserId in AdminServer.")
