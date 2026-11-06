@@ -1,0 +1,1018 @@
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local UserService = game:GetService("UserService")
+local HttpService = game:GetService("HttpService")
+
+local player = Players.LocalPlayer
+
+local LOAD_DELAY = 0.1        -- jeda per row valid di tab All
+local MIN_ID = 1              -- batas bawah ID acak
+local MAX_ID = 9000000000     -- batas atas ID acak
+local BATCH = 40              -- jumlah ID acak yang dicek per request
+local MAX_ROWS = 500          -- batas row di tab All
+
+local rng = Random.new()
+local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
+
+-- ===== LUCIDE =====
+local lucide
+pcall(function()
+	lucide = loadstring(game:HttpGetAsync(
+		"https://raw.githubusercontent.com/Footagesus/Icons/main/Main-v2.lua"
+	))()
+end)
+
+pcall(function()
+	if lucide and lucide.SetIconsType then
+		lucide.SetIconsType("lucide")
+	end
+end)
+
+local FALLBACK = {
+	users = "ID", search = "?", copy = "Copy",
+	check = "OK", x = "X", minus = "-",
+}
+
+local function resolveIcon(name)
+	if not lucide then return nil end
+	local ok, res = pcall(function()
+		return lucide.Icon(name, "lucide")
+	end)
+	if not ok or res == nil then
+		ok, res = pcall(function()
+			return lucide.Icon(name)
+		end)
+	end
+	if not ok or res == nil then return nil end
+
+	if type(res) == "string" then
+		return { image = res }
+	end
+	if type(res) == "table" then
+		local meta = res[2] or res
+		local img = res[1] or res.Image or (type(meta) == "table" and meta.Image)
+		if img then
+			return {
+				image = img,
+				size = meta.ImageRectSize,
+				pos = meta.ImageRectPosition or meta.ImagePosition,
+			}
+		end
+	end
+	return nil
+end
+
+-- ===== THEME =====
+local T = {
+	bg = Color3.fromRGB(19, 19, 21),
+	surface = Color3.fromRGB(27, 27, 30),
+	hover = Color3.fromRGB(36, 36, 40),
+	border = Color3.fromRGB(46, 46, 51),
+	text = Color3.fromRGB(235, 235, 238),
+	dim = Color3.fromRGB(135, 135, 143),
+	accent = Color3.fromRGB(255, 138, 61),
+	onAccent = Color3.fromRGB(24, 16, 10),
+}
+
+-- State: 0 = offline, 1 = lobby, 2 = in game
+local STATUS_COLOR = {
+	[0] = Color3.fromRGB(110, 110, 118),
+	[1] = Color3.fromRGB(70, 140, 255),
+	[2] = Color3.fromRGB(70, 200, 110),
+}
+
+local STATE_RANK = { [2] = 1, [1] = 2, [0] = 3 }
+local DELETED_RANK = 4
+local RANK_STEP = 100000
+
+local FAST = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local MED = TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+
+local function tween(obj, info, props)
+	TweenService:Create(obj, info, props):Play()
+end
+
+-- ===== HELPERS =====
+local function corner(parent, r)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, r)
+	c.Parent = parent
+	return c
+end
+
+local function stroke(parent, color, thick)
+	local s = Instance.new("UIStroke")
+	s.Color = color
+	s.Thickness = thick or 1
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	s.Parent = parent
+	return s
+end
+
+local function label(parent, text, size, font, color)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Text = text
+	l.TextSize = size
+	l.Font = font
+	l.TextColor3 = color
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.Parent = parent
+	return l
+end
+
+local function applyIcon(img, name)
+	local data = resolveIcon(name)
+	if not data then return false end
+	img.Image = data.image
+	if data.size then img.ImageRectSize = data.size end
+	if data.pos then img.ImageRectOffset = data.pos end
+	return true
+end
+
+local function makeIcon(parent, name, size, color)
+	local img = Instance.new("ImageLabel")
+	img.BackgroundTransparency = 1
+	img.AnchorPoint = Vector2.new(0.5, 0.5)
+	img.Position = UDim2.new(0.5, 0, 0.5, 0)
+	img.Size = UDim2.new(0, size, 0, size)
+	img.ImageColor3 = color
+	img.Parent = parent
+
+	if applyIcon(img, name) then return img end
+
+	img:Destroy()
+	local lbl = Instance.new("TextLabel")
+	lbl.BackgroundTransparency = 1
+	lbl.AnchorPoint = Vector2.new(0.5, 0.5)
+	lbl.Position = UDim2.new(0.5, 0, 0.5, 0)
+	lbl.Size = UDim2.new(1, 0, 1, 0)
+	lbl.Font = Enum.Font.GothamBold
+	lbl.TextSize = 11
+	lbl.Text = FALLBACK[name] or name
+	lbl.TextColor3 = color
+	lbl.Parent = parent
+	return lbl
+end
+
+local function setIcon(icon, name)
+	if icon:IsA("TextLabel") then
+		icon.Text = FALLBACK[name] or name
+	else
+		applyIcon(icon, name)
+	end
+end
+
+local function setIconColor(icon, color)
+	if icon:IsA("TextLabel") then
+		icon.TextColor3 = color
+	else
+		icon.ImageColor3 = color
+	end
+end
+
+local function getFriends()
+	local list = {}
+	local ok, pages = pcall(function()
+		return Players:GetFriendsAsync(player.UserId)
+	end)
+	if not ok then return list end
+	while true do
+		for _, item in ipairs(pages:GetCurrentPage()) do
+			table.insert(list, item)
+		end
+		if pages.IsFinished then break end
+		local adv = pcall(function()
+			pages:AdvanceToNextPageAsync()
+		end)
+		if not adv then break end
+	end
+	table.sort(list, function(a, b)
+		return string.lower(a.Username or "") < string.lower(b.Username or "")
+	end)
+	return list
+end
+
+local function isDeletedAccount(friend)
+	local u = string.lower(friend.Username or "")
+	local d = string.lower(friend.DisplayName or "")
+	if u == "" then return true end
+	if string.find(u, "^deleted") then return true end
+	if string.find(d, "account deleted", 1, true) then return true end
+	return false
+end
+
+local function fetchPresence()
+	local map = {}
+	local ok, res = pcall(function()
+		return player:GetFriendsOnline(200)
+	end)
+	if ok and type(res) == "table" then
+		for _, f in ipairs(res) do
+			local uid = f.VisitorId or f.UserId
+			if uid then
+				local lt = f.LocationType
+				if lt == 1 or lt == 4 or lt == 5 then
+					map[uid] = 2
+				else
+					map[uid] = 1
+				end
+			end
+		end
+	end
+	return map
+end
+
+-- Cadangan: cek ID lewat HTTP request
+local function lookupViaHttp(ids)
+	if not httpRequest then return false, {} end
+	local ok, res = pcall(function()
+		return httpRequest({
+			Url = "https://users.roproxy.com/v1/users",
+			Method = "POST",
+			Headers = { ["Content-Type"] = "application/json" },
+			Body = HttpService:JSONEncode({ userIds = ids, excludeBannedUsers = true }),
+		})
+	end)
+	if not ok or not res or res.StatusCode ~= 200 then return false, {} end
+
+	local okJ, decoded = pcall(function()
+		return HttpService:JSONDecode(res.Body)
+	end)
+	if not okJ or type(decoded) ~= "table" or type(decoded.data) ~= "table" then
+		return false, {}
+	end
+
+	local valid = {}
+	for _, u in ipairs(decoded.data) do
+		local data = { Id = u.id, Username = u.name, DisplayName = u.displayName }
+		if data.Id and not isDeletedAccount(data) then
+			table.insert(valid, data)
+		end
+	end
+	return true, valid
+end
+
+-- Cek banyak ID sekaligus. Return ok, list akun valid saja
+local function fetchValidUsers(ids)
+	local ok, res = pcall(function()
+		return UserService:GetUserInfosByUserIdsAsync(ids)
+	end)
+	if ok and type(res) == "table" then
+		local valid = {}
+		for _, info in ipairs(res) do
+			local data = { Id = info.Id, Username = info.Username, DisplayName = info.DisplayName }
+			if data.Id and not isDeletedAccount(data) then
+				table.insert(valid, data)
+			end
+		end
+		return true, valid
+	end
+	return lookupViaHttp(ids)
+end
+
+local function copyToClipboard(text)
+	local fn = setclipboard or toclipboard or (syn and syn.write_clipboard)
+	if fn then
+		return pcall(fn, text)
+	end
+	return false
+end
+
+-- ===== GUI =====
+local parentGui
+pcall(function()
+	if gethui then parentGui = gethui() end
+end)
+parentGui = parentGui or player:WaitForChild("PlayerGui")
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "AccountIdViewer"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = parentGui
+
+local FULL_H, HEAD_H = 500, 48
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 360, 0, FULL_H)
+main.Position = UDim2.new(0.5, -180, 0.5, -FULL_H / 2)
+main.BackgroundColor3 = T.bg
+main.BorderSizePixel = 0
+main.ClipsDescendants = true
+main.Parent = gui
+corner(main, 12)
+stroke(main, T.border, 1)
+
+-- Header
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, HEAD_H)
+header.BackgroundTransparency = 1
+header.Parent = main
+
+local headIcon = Instance.new("Frame")
+headIcon.BackgroundTransparency = 1
+headIcon.Position = UDim2.new(0, 14, 0.5, -10)
+headIcon.Size = UDim2.new(0, 20, 0, 20)
+headIcon.Parent = header
+makeIcon(headIcon, "users", 18, T.accent)
+
+local title = label(header, "Account IDs", 15, Enum.Font.GothamBold, T.text)
+title.Position = UDim2.new(0, 42, 0, 0)
+title.Size = UDim2.new(0, 100, 1, 0)
+
+local countBadge = Instance.new("Frame")
+countBadge.AnchorPoint = Vector2.new(0, 0.5)
+countBadge.Position = UDim2.new(0, 142, 0.5, 0)
+countBadge.Size = UDim2.new(0, 38, 0, 20)
+countBadge.BackgroundColor3 = T.surface
+countBadge.BorderSizePixel = 0
+countBadge.Parent = header
+corner(countBadge, 10)
+
+local countLabel = label(countBadge, "0", 11, Enum.Font.GothamMedium, T.dim)
+countLabel.Size = UDim2.new(1, 0, 1, 0)
+countLabel.TextXAlignment = Enum.TextXAlignment.Center
+
+local function headerButton(iconName, xOffset, hoverColor)
+	local b = Instance.new("TextButton")
+	b.Text = ""
+	b.AutoButtonColor = false
+	b.AnchorPoint = Vector2.new(1, 0.5)
+	b.Position = UDim2.new(1, xOffset, 0.5, 0)
+	b.Size = UDim2.new(0, 28, 0, 28)
+	b.BackgroundColor3 = T.hover
+	b.BackgroundTransparency = 1
+	b.BorderSizePixel = 0
+	b.Parent = header
+	corner(b, 8)
+	local ic = makeIcon(b, iconName, 14, T.dim)
+	b.MouseEnter:Connect(function()
+		tween(b, FAST, { BackgroundTransparency = 0 })
+		setIconColor(ic, hoverColor or T.text)
+	end)
+	b.MouseLeave:Connect(function()
+		tween(b, FAST, { BackgroundTransparency = 1 })
+		setIconColor(ic, T.dim)
+	end)
+	return b
+end
+
+local closeBtn = headerButton("x", -10, Color3.fromRGB(255, 99, 99))
+local minBtn = headerButton("minus", -42, T.text)
+
+local divider = Instance.new("Frame")
+divider.Position = UDim2.new(0, 0, 0, HEAD_H)
+divider.Size = UDim2.new(1, 0, 0, 1)
+divider.BackgroundColor3 = T.border
+divider.BorderSizePixel = 0
+divider.Parent = main
+
+-- Body
+local body = Instance.new("Frame")
+body.Position = UDim2.new(0, 0, 0, HEAD_H + 1)
+body.Size = UDim2.new(1, 0, 1, -(HEAD_H + 1))
+body.BackgroundTransparency = 1
+body.Parent = main
+
+-- Tabs
+local tabBar = Instance.new("Frame")
+tabBar.Position = UDim2.new(0, 12, 0, 12)
+tabBar.Size = UDim2.new(1, -24, 0, 32)
+tabBar.BackgroundColor3 = T.surface
+tabBar.BorderSizePixel = 0
+tabBar.Parent = body
+corner(tabBar, 8)
+
+local tabPad = Instance.new("UIPadding")
+tabPad.PaddingLeft = UDim.new(0, 3)
+tabPad.PaddingRight = UDim.new(0, 3)
+tabPad.PaddingTop = UDim.new(0, 3)
+tabPad.PaddingBottom = UDim.new(0, 3)
+tabPad.Parent = tabBar
+
+local tabButtons = {}
+local function makeTab(text, xScale)
+	local b = Instance.new("TextButton")
+	b.AutoButtonColor = false
+	b.Position = UDim2.new(xScale, 0, 0, 0)
+	b.Size = UDim2.new(0.5, 0, 1, 0)
+	b.BackgroundColor3 = T.accent
+	b.BackgroundTransparency = 1
+	b.BorderSizePixel = 0
+	b.Font = Enum.Font.GothamMedium
+	b.TextSize = 13
+	b.Text = text
+	b.TextColor3 = T.dim
+	b.Parent = tabBar
+	corner(b, 6)
+	return b
+end
+tabButtons.friends = makeTab("Friends", 0)
+tabButtons.all = makeTab("All", 0.5)
+
+-- Search
+local searchBar = Instance.new("Frame")
+searchBar.Position = UDim2.new(0, 12, 0, 52)
+searchBar.Size = UDim2.new(1, -24, 0, 36)
+searchBar.BackgroundColor3 = T.surface
+searchBar.BorderSizePixel = 0
+searchBar.Parent = body
+corner(searchBar, 8)
+local searchStroke = stroke(searchBar, T.border, 1)
+
+local searchIconHolder = Instance.new("Frame")
+searchIconHolder.BackgroundTransparency = 1
+searchIconHolder.Position = UDim2.new(0, 8, 0, 0)
+searchIconHolder.Size = UDim2.new(0, 20, 1, 0)
+searchIconHolder.Parent = searchBar
+makeIcon(searchIconHolder, "search", 15, T.dim)
+
+local searchBox = Instance.new("TextBox")
+searchBox.BackgroundTransparency = 1
+searchBox.Position = UDim2.new(0, 34, 0, 0)
+searchBox.Size = UDim2.new(1, -44, 1, 0)
+searchBox.Font = Enum.Font.Gotham
+searchBox.TextSize = 13
+searchBox.TextXAlignment = Enum.TextXAlignment.Left
+searchBox.TextColor3 = T.text
+searchBox.PlaceholderText = "Search name, username, or ID"
+searchBox.PlaceholderColor3 = T.dim
+searchBox.Text = ""
+searchBox.ClearTextOnFocus = false
+searchBox.Parent = searchBar
+
+searchBox.Focused:Connect(function()
+	tween(searchStroke, FAST, { Color = T.accent })
+end)
+
+-- Toast
+local toastFrame = Instance.new("Frame")
+toastFrame.AnchorPoint = Vector2.new(0.5, 1)
+toastFrame.Position = UDim2.new(0.5, 0, 1, 20)
+toastFrame.Size = UDim2.new(0, 190, 0, 32)
+toastFrame.BackgroundColor3 = T.text
+toastFrame.BorderSizePixel = 0
+toastFrame.ZIndex = 10
+toastFrame.Parent = body
+corner(toastFrame, 16)
+
+local toastText = label(toastFrame, "", 12, Enum.Font.GothamMedium, T.bg)
+toastText.Size = UDim2.new(1, 0, 1, 0)
+toastText.TextXAlignment = Enum.TextXAlignment.Center
+toastText.ZIndex = 11
+
+local toastToken = 0
+local function toast(text)
+	toastToken += 1
+	local mine = toastToken
+	toastText.Text = text
+	tween(toastFrame, MED, { Position = UDim2.new(0.5, 0, 1, -14) })
+	task.delay(1.6, function()
+		if mine == toastToken then
+			tween(toastFrame, MED, { Position = UDim2.new(0.5, 0, 1, 20) })
+		end
+	end)
+end
+
+-- ===== VIEWS =====
+local ROW_H = 56
+local DOT = 10
+
+local function createView(loadingText)
+	local scroll = Instance.new("ScrollingFrame")
+	scroll.Position = UDim2.new(0, 12, 0, 98)
+	scroll.Size = UDim2.new(1, -24, 1, -110)
+	scroll.BackgroundTransparency = 1
+	scroll.BorderSizePixel = 0
+	scroll.ScrollBarThickness = 3
+	scroll.ScrollBarImageColor3 = T.border
+	scroll.ScrollingDirection = Enum.ScrollingDirection.Y
+	scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	scroll.Visible = false
+	scroll.Parent = body
+
+	local lst = Instance.new("UIListLayout")
+	lst.Padding = UDim.new(0, 6)
+	lst.SortOrder = Enum.SortOrder.LayoutOrder
+	lst.Parent = scroll
+
+	lst:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		scroll.CanvasSize = UDim2.new(0, 0, 0, lst.AbsoluteContentSize.Y + 4)
+	end)
+
+	local st = label(scroll, loadingText, 13, Enum.Font.Gotham, T.dim)
+	st.Size = UDim2.new(1, 0, 0, 60)
+	st.TextXAlignment = Enum.TextXAlignment.Center
+	st.LayoutOrder = -1000000
+
+	return { scroll = scroll, status = st, rows = {}, loaded = false, empty = "No accounts found" }
+end
+
+local friendsView = createView("Loading friends")
+friendsView.empty = "No friends found"
+local allView = createView("Finding valid accounts")
+allView.empty = "No accounts found"
+
+local activeView = friendsView
+
+local function updateCount()
+	countLabel.Text = tostring(#activeView.rows)
+end
+
+local function applyFilter(view)
+	local q = string.lower(searchBox.Text)
+	local shown = 0
+	for _, r in ipairs(view.rows) do
+		local vis = (q == "") or (string.find(r.key, q, 1, true) ~= nil)
+		r.frame.Visible = vis
+		if vis then shown += 1 end
+	end
+	if #view.rows == 0 then
+		view.status.Text = view.loaded and view.empty or view.status.Text
+		view.status.Visible = true
+	elseif shown == 0 then
+		view.status.Text = "No results"
+		view.status.Visible = true
+	else
+		view.status.Visible = false
+	end
+end
+
+local function updateRowState(r, state)
+	if r.fixed ~= nil then state = r.fixed end
+	r.state = state
+	if r.deleted then
+		r.frame.LayoutOrder = r.flat and r.alpha or (DELETED_RANK * RANK_STEP + r.alpha)
+		return
+	end
+	tween(r.dot, FAST, { BackgroundColor3 = STATUS_COLOR[state] or STATUS_COLOR[0] })
+	if r.flat then
+		r.frame.LayoutOrder = r.alpha
+	else
+		r.frame.LayoutOrder = (STATE_RANK[state] or 3) * RANK_STEP + r.alpha
+	end
+end
+
+-- flat = true: urutan mengikuti alpha (tab All), tanpa pengelompokan status
+local function addRow(view, friend, alpha, state, fixed, flat)
+	local idText = tostring(friend.Id)
+	local deleted = isDeletedAccount(friend)
+
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, -6, 0, ROW_H)
+	row.BackgroundColor3 = T.surface
+	row.BorderSizePixel = 0
+	row.Parent = view.scroll
+	corner(row, 8)
+
+	row.MouseEnter:Connect(function()
+		tween(row, FAST, { BackgroundColor3 = T.hover })
+	end)
+	row.MouseLeave:Connect(function()
+		tween(row, FAST, { BackgroundColor3 = T.surface })
+	end)
+
+	if deleted then
+		local ghost = Instance.new("Frame")
+		ghost.Position = UDim2.new(0, 10, 0.5, -18)
+		ghost.Size = UDim2.new(0, 36, 0, 36)
+		ghost.BackgroundColor3 = STATUS_COLOR[0]
+		ghost.BorderSizePixel = 0
+		ghost.Parent = row
+		corner(ghost, 18)
+
+		local ghostText = Instance.new("TextLabel")
+		ghostText.Name = "LogOutDelete"
+		ghostText.BackgroundTransparency = 1
+		ghostText.AnchorPoint = Vector2.new(0.5, 0.5)
+		ghostText.Position = UDim2.new(0.5, 0, 0.5, 0)
+		ghostText.Size = UDim2.new(1, -6, 1, -6)
+		ghostText.Font = Enum.Font.GothamBold
+		ghostText.Text = "Log Out/Delete"
+		ghostText.TextColor3 = T.text
+		ghostText.TextScaled = true
+		ghostText.TextWrapped = true
+		ghostText.Parent = ghost
+
+		local limit = Instance.new("UITextSizeConstraint")
+		limit.MaxTextSize = 9
+		limit.MinTextSize = 5
+		limit.Parent = ghostText
+	else
+		local avatar = Instance.new("ImageLabel")
+		avatar.Position = UDim2.new(0, 10, 0.5, -18)
+		avatar.Size = UDim2.new(0, 36, 0, 36)
+		avatar.BackgroundColor3 = T.bg
+		avatar.BorderSizePixel = 0
+		avatar.Parent = row
+		corner(avatar, 18)
+
+		task.spawn(function()
+			local ok, img = pcall(function()
+				return Players:GetUserThumbnailAsync(
+					friend.Id,
+					Enum.ThumbnailType.HeadShot,
+					Enum.ThumbnailSize.Size100x100
+				)
+			end)
+			if ok and avatar.Parent then avatar.Image = img end
+		end)
+	end
+
+	local dot = Instance.new("Frame")
+	dot.Name = "StatusDot"
+	dot.Position = UDim2.new(0, 56, 0, 14)
+	dot.Size = UDim2.new(0, DOT, 0, DOT)
+	dot.BackgroundColor3 = STATUS_COLOR[0]
+	dot.BorderSizePixel = 0
+	dot.Parent = row
+	corner(dot, DOT / 2)
+
+	local displayName = friend.DisplayName
+	if displayName == nil or displayName == "" then
+		displayName = deleted and "Unavailable" or "Unknown"
+	end
+
+	local name = label(row, displayName, 13, Enum.Font.GothamMedium, T.text)
+	name.Position = UDim2.new(0, 56 + DOT + 6, 0, 9)
+	name.Size = UDim2.new(1, -(56 + DOT + 6 + 54), 0, 18)
+	name.TextTruncate = Enum.TextTruncate.AtEnd
+
+	local idBox = Instance.new("TextBox")
+	idBox.BackgroundTransparency = 1
+	idBox.Position = UDim2.new(0, 56, 0, 28)
+	idBox.Size = UDim2.new(1, -110, 0, 18)
+	idBox.Font = Enum.Font.Code
+	idBox.TextSize = 12
+	idBox.TextXAlignment = Enum.TextXAlignment.Left
+	idBox.TextColor3 = T.dim
+	idBox.Text = idText
+	idBox.ClearTextOnFocus = false
+	idBox.TextEditable = true
+	idBox.Parent = row
+
+	idBox:GetPropertyChangedSignal("Text"):Connect(function()
+		if idBox.Text ~= idText then
+			idBox.Text = idText
+		end
+	end)
+
+	local function selectAll()
+		idBox:CaptureFocus()
+		task.wait()
+		idBox.SelectionStart = 1
+		idBox.CursorPosition = #idText + 1
+	end
+
+	local btn = Instance.new("TextButton")
+	btn.Text = ""
+	btn.AutoButtonColor = false
+	btn.AnchorPoint = Vector2.new(1, 0.5)
+	btn.Position = UDim2.new(1, -10, 0.5, 0)
+	btn.Size = UDim2.new(0, 32, 0, 32)
+	btn.BackgroundColor3 = T.accent
+	btn.BackgroundTransparency = 1
+	btn.BorderSizePixel = 0
+	btn.Parent = row
+	corner(btn, 8)
+	local btnStroke = stroke(btn, T.border, 1)
+
+	local icon = makeIcon(btn, "copy", 15, T.dim)
+
+	btn.MouseEnter:Connect(function()
+		tween(btn, FAST, { BackgroundTransparency = 0 })
+		tween(btnStroke, FAST, { Transparency = 1 })
+		setIconColor(icon, T.onAccent)
+	end)
+	btn.MouseLeave:Connect(function()
+		tween(btn, FAST, { BackgroundTransparency = 1 })
+		tween(btnStroke, FAST, { Transparency = 0 })
+		setIconColor(icon, T.dim)
+	end)
+
+	local busy = false
+	btn.MouseButton1Click:Connect(function()
+		if copyToClipboard(idText) then
+			toast("Copied " .. idText)
+		else
+			task.spawn(selectAll)
+			toast("Selected, press Ctrl+C")
+		end
+		if busy then return end
+		busy = true
+		setIcon(icon, "check")
+		task.delay(1.4, function()
+			setIcon(icon, "copy")
+			busy = false
+		end)
+	end)
+
+	local r = {
+		frame = row,
+		dot = dot,
+		id = friend.Id,
+		deleted = deleted,
+		alpha = alpha,
+		fixed = fixed,
+		flat = flat,
+		state = 0,
+		key = string.lower((friend.DisplayName or "") .. " " .. (friend.Username or "") .. " " .. idText),
+	}
+	table.insert(view.rows, r)
+	updateRowState(r, state)
+	return r
+end
+
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+	applyFilter(activeView)
+end)
+
+local function refreshPresence()
+	local presence = fetchPresence()
+	for _, r in ipairs(friendsView.rows) do
+		updateRowState(r, presence[r.id] or 0)
+	end
+end
+
+-- ===== TAB ALL (ID acak, hanya akun valid) =====
+local allStarted = false
+local allSeq = 0
+local lookupSeq = 0
+local seen = {}   -- ID yang sudah dicek / sudah tampil
+local pool = {}   -- akun valid yang menunggu giliran tampil
+local alive = true
+
+local function addAllRow(data, alpha)
+	local inServer = Players:GetPlayerByUserId(data.Id) ~= nil
+	local state = inServer and 2 or 0
+	addRow(allView, data, alpha, state, state, true)
+	allView.loaded = true
+	applyFilter(allView)
+	if activeView == allView then updateCount() end
+end
+
+local function refillPool()
+	local ids = {}
+	local picked = {}
+	while #ids < BATCH do
+		local id = rng:NextInteger(MIN_ID, MAX_ID)
+		if not seen[id] and not picked[id] then
+			picked[id] = true
+			table.insert(ids, id)
+		end
+	end
+
+	local ok, valid = fetchValidUsers(ids)
+	if not ok then
+		return false -- throttle / error
+	end
+
+	for _, id in ipairs(ids) do
+		seen[id] = true
+	end
+	for _, data in ipairs(valid) do
+		table.insert(pool, data)
+	end
+	return true
+end
+
+local function runAllWorker()
+	task.spawn(function()
+		while alive and gui.Parent do
+			if activeView ~= allView then
+				task.wait(0.5) -- pause saat tab Friends aktif
+			elseif #allView.rows >= MAX_ROWS then
+				allView.loaded = true
+				applyFilter(allView)
+				task.wait(1)
+			elseif #pool == 0 then
+				if refillPool() then
+					task.wait(0.2)
+				else
+					if #allView.rows == 0 then
+						allView.status.Text = "Request gagal, mencoba lagi"
+						allView.status.Visible = true
+					end
+					task.wait(2)
+				end
+			else
+				local data = table.remove(pool, 1)
+				allSeq += 1
+				addAllRow(data, allSeq)
+				task.wait(LOAD_DELAY)
+			end
+		end
+	end)
+end
+
+-- ===== CARI LANGSUNG KE ROBLOX (username / ID) =====
+local function lookupId(id)
+	for _, r in ipairs(allView.rows) do
+		if r.id == id then
+			allView.scroll.CanvasPosition = Vector2.new(0, 0)
+			toast("Sudah ada di list")
+			return
+		end
+	end
+	local ok, valid = fetchValidUsers({ id })
+	if not ok then
+		toast("Gagal cek, coba lagi")
+		return
+	end
+	if #valid == 0 then
+		toast("ID tidak valid")
+		return
+	end
+	seen[id] = true
+	lookupSeq += 1
+	addAllRow(valid[1], -lookupSeq)
+	allView.scroll.CanvasPosition = Vector2.new(0, 0)
+	toast("Akun ditemukan")
+end
+
+-- Username -> ID
+local function resolveUsername(name)
+	local ok, id = pcall(function()
+		return Players:GetUserIdFromNameAsync(name)
+	end)
+	if ok and id then return id end
+
+	if httpRequest then
+		local ok2, res = pcall(function()
+			return httpRequest({
+				Url = "https://users.roproxy.com/v1/usernames/users",
+				Method = "POST",
+				Headers = { ["Content-Type"] = "application/json" },
+				Body = HttpService:JSONEncode({ usernames = { name }, excludeBannedUsers = true }),
+			})
+		end)
+		if ok2 and res and res.StatusCode == 200 then
+			local okJ, dec = pcall(function()
+				return HttpService:JSONDecode(res.Body)
+			end)
+			if okJ and type(dec) == "table" and type(dec.data) == "table" and dec.data[1] then
+				return dec.data[1].id
+			end
+		end
+	end
+	return nil
+end
+
+local tried = {} -- query yang sudah dicari, supaya tidak diulang terus
+
+local function lookupQuery(text, force)
+	local q = string.lower(text)
+	if not force and tried[q] then return end
+	tried[q] = true
+
+	local num = tonumber(q)
+	if num and num >= 1 and num == math.floor(num) then
+		toast("Mencari ID...")
+		lookupId(num)
+		return
+	end
+
+	if not string.match(text, "^[%w_]+$") or #text < 3 or #text > 20 then
+		toast("Username tidak valid")
+		return
+	end
+
+	toast("Mencari di Roblox...")
+	local id = resolveUsername(text)
+	if not id then
+		toast("Username tidak ditemukan")
+		return
+	end
+	lookupId(id)
+end
+
+local function hasVisibleRow()
+	for _, r in ipairs(allView.rows) do
+		if r.frame.Visible then return true end
+	end
+	return false
+end
+
+-- Otomatis cari ke Roblox kalau hasil filter kosong
+local searchToken = 0
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+	searchToken += 1
+	local mine = searchToken
+	task.delay(0.7, function()
+		if mine ~= searchToken or not gui.Parent then return end
+		if activeView ~= allView then return end
+		local text = (string.gsub(searchBox.Text, "%s", ""))
+		if text == "" or hasVisibleRow() then return end
+		lookupQuery(text, false)
+	end)
+end)
+
+searchBox.FocusLost:Connect(function(enterPressed)
+	tween(searchStroke, FAST, { Color = T.border })
+	if enterPressed and activeView == allView then
+		local text = (string.gsub(searchBox.Text, "%s", ""))
+		if text ~= "" then
+			task.spawn(lookupQuery, text, true)
+		end
+	end
+end)
+
+local function selectTab(which)
+	local isAll = which == "all"
+	activeView = isAll and allView or friendsView
+	friendsView.scroll.Visible = not isAll
+	allView.scroll.Visible = isAll
+	searchBox.PlaceholderText = isAll and "Filter list, or type exact username/ID" or "Search name, username, or ID"
+
+	for key, b in pairs(tabButtons) do
+		local on = key == which
+		tween(b, FAST, {
+			BackgroundTransparency = on and 0 or 1,
+			TextColor3 = on and T.onAccent or T.dim,
+		})
+	end
+
+	if isAll and not allStarted then
+		allStarted = true
+		runAllWorker()
+	end
+	applyFilter(activeView)
+	updateCount()
+end
+
+tabButtons.friends.MouseButton1Click:Connect(function() selectTab("friends") end)
+tabButtons.all.MouseButton1Click:Connect(function() selectTab("all") end)
+
+-- ===== DRAG =====
+do
+	local dragging, dragStart, startPos
+	header.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = main.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			local d = input.Position - dragStart
+			main.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + d.X,
+				startPos.Y.Scale, startPos.Y.Offset + d.Y
+			)
+		end
+	end)
+end
+
+-- ===== MINIMIZE / CLOSE =====
+local minimized = false
+minBtn.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	if minimized then
+		body.Visible = false
+		divider.Visible = false
+		tween(main, MED, { Size = UDim2.new(0, 360, 0, HEAD_H) })
+	else
+		tween(main, MED, { Size = UDim2.new(0, 360, 0, FULL_H) })
+		task.delay(0.12, function()
+			if not minimized then
+				body.Visible = true
+				divider.Visible = true
+			end
+		end)
+	end
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	alive = false
+	gui:Destroy()
+end)
+
+-- ===== LOAD =====
+selectTab("friends")
+
+task.spawn(function()
+	local friends = getFriends()
+	local presence = fetchPresence()
+	for i, friend in ipairs(friends) do
+		addRow(friendsView, friend, i, presence[friend.Id] or 0)
+	end
+	friendsView.loaded = true
+	applyFilter(friendsView)
+	if activeView == friendsView then updateCount() end
+
+	while gui.Parent do
+		task.wait(30)
+		if not gui.Parent then break end
+		refreshPresence()
+	end
+end)
