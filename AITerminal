@@ -1,0 +1,1253 @@
+--// OxzY AI | Terminal-style AI chat for executors | Lucide icons
+local HttpService = game:GetService("HttpService")
+local UIS = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+
+local APP = "OxzY AI"
+local BASE_SYSTEM = "You are OxzY AI, an expert Roblox Luau assistant for script executors. Be concise. Always put code inside ```lua blocks. Reply in the same language the user writes in."
+local systemPrompt = BASE_SYSTEM
+
+--// ICONS (Lucide)
+local lucide
+pcall(function()
+	lucide = loadstring(game:HttpGetAsync(
+		"https://raw.githubusercontent.com/Footagesus/Icons/main/Main-v2.lua"
+	))()
+end)
+pcall(function()
+	if lucide and lucide.SetIconsType then lucide.SetIconsType("lucide") end
+end)
+
+local iconCache = {}
+local function resolveIcon(name)
+	if iconCache[name] ~= nil then return iconCache[name] end
+	local result = false
+	if lucide then
+		for _, fn in ipairs({ "Icon", "GetIcon", "Image", "Get" }) do
+			if type(lucide[fn]) == "function" then
+				local ok, a, b, c = pcall(lucide[fn], name)
+				if ok and a then result = { a, b, c } break end
+			end
+		end
+	end
+	iconCache[name] = result
+	return result
+end
+
+local function applyIcon(img, name)
+	local r = resolveIcon(name)
+	if not r then return false end
+	local a, b, c = r[1], r[2], r[3]
+	local image, rsize, rpos
+	if type(a) == "table" then
+		image = a.Image or a.ImageId or a.Id
+		rsize = a.ImageRectSize
+		rpos = a.ImageRectPosition or a.ImageRectOffset
+	else
+		image = a
+		if type(b) == "table" then
+			rsize = b.ImageRectSize
+			rpos = b.ImageRectPosition or b.ImageRectOffset
+		else
+			rsize, rpos = b, c
+		end
+	end
+	if not image then return false end
+	if type(image) == "number" or tostring(image):match("^%d+$") then
+		image = "rbxassetid://" .. tostring(image)
+	end
+	img.Image = tostring(image)
+	if typeof(rsize) == "Vector2" then img.ImageRectSize = rsize end
+	if typeof(rpos) == "Vector2" then img.ImageRectOffset = rpos end
+	return true
+end
+
+--// HELPERS
+local function make(class, props, parent)
+	local o = Instance.new(class)
+	for k, v in pairs(props or {}) do o[k] = v end
+	o.Parent = parent
+	return o
+end
+local function corner(p, r) make("UICorner", { CornerRadius = UDim.new(0, r) }, p) end
+local function hex(c) return "#" .. c:ToHex() end
+local function trim(s) return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")) end
+local function esc(s)
+	s = tostring(s):gsub("&", "&amp;")
+	s = s:gsub("<", "&lt;")
+	s = s:gsub(">", "&gt;")
+	s = s:gsub("\t", "  ")
+	return s
+end
+local function copyText(s)
+	local fn = setclipboard or toclipboard or (syn and syn.write_clipboard)
+	if fn then return (pcall(fn, s)) end
+	return false
+end
+
+local C = {
+	win = Color3.fromRGB(30, 30, 30), bar = Color3.fromRGB(56, 56, 58),
+	card = Color3.fromRGB(44, 44, 48), sel = Color3.fromRGB(10, 90, 200),
+	text = Color3.fromRGB(230, 230, 230), dim = Color3.fromRGB(128, 128, 134),
+	prompt = Color3.fromRGB(131, 201, 95), code = Color3.fromRGB(125, 207, 255),
+	err = Color3.fromRGB(255, 107, 107), warn = Color3.fromRGB(255, 200, 87),
+	red = Color3.fromRGB(255, 95, 86), yellow = Color3.fromRGB(255, 189, 46),
+	green = Color3.fromRGB(39, 201, 63), input = Color3.fromRGB(22, 22, 24),
+}
+local FONT = Enum.Font.Code
+local TS = 13
+
+--// STORAGE
+local FILE_CHATS, FILE_APIS = "OxzYAI_chats.json", "OxzYAI_apis.json"
+local canFS = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
+
+local function readJson(name, default)
+	if not canFS then return default end
+	local ok, res = pcall(function()
+		if isfile(name) then return HttpService:JSONDecode(readfile(name)) end
+	end)
+	if ok and type(res) == "table" then return res end
+	return default
+end
+local function writeJson(name, data)
+	if not canFS then return false end
+	return (pcall(function() writefile(name, HttpService:JSONEncode(data)) end))
+end
+
+--// STATE
+local function kindOf(url)
+	if tostring(url):lower():find("anthropic.com", 1, true) then return "anthropic" end
+	return "openai"
+end
+
+local providers = { { name = "OpenAI", model = "openai", kind = "free", builtin = true } }
+for _, a in ipairs(readJson(FILE_APIS, {})) do
+	if a.name and a.url and a.model then
+		table.insert(providers, { name = a.name, url = a.url, model = a.model, key = a.key or "", kind = kindOf(a.url), saved = true })
+	end
+end
+local current = 1
+
+local chats = readJson(FILE_CHATS, {})
+local activeChat = nil
+local codes = {}
+local busy = false
+local lastPrompt = nil
+
+local function saveChats()
+	if #chats > 50 then
+		table.sort(chats, function(a, b) return (a.updated or 0) > (b.updated or 0) end)
+		while #chats > 50 do table.remove(chats) end
+	end
+	writeJson(FILE_CHATS, chats)
+end
+local function persistAPIs()
+	local list = {}
+	for _, p in ipairs(providers) do
+		if p.saved then table.insert(list, { name = p.name, url = p.url, model = p.model, key = p.key }) end
+	end
+	return writeJson(FILE_APIS, list)
+end
+
+--// WINDOW
+local parentGui = (gethui and gethui()) or CoreGui
+pcall(function()
+	local old = parentGui:FindFirstChild("OxzYAIGui")
+	if old then old:Destroy() end
+end)
+local gui = make("ScreenGui", {
+	Name = "OxzYAIGui", ResetOnSpawn = false, IgnoreGuiInset = true,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, parentGui)
+
+local main = make("Frame", {
+	Size = UDim2.fromScale(0.62, 0.64), Position = UDim2.fromScale(0.5, 0.5),
+	AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = C.win, ClipsDescendants = true,
+}, gui)
+corner(main, 10)
+local sizeC = make("UISizeConstraint", { MinSize = Vector2.new(300, 280), MaxSize = Vector2.new(740, 540) }, main)
+make("UIStroke", { Color = Color3.fromRGB(70, 70, 74), Thickness = 1 }, main)
+
+local top = make("Frame", { Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = C.bar, ZIndex = 30 }, main)
+local function dot(x, color)
+	local d = make("TextButton", {
+		Size = UDim2.fromOffset(12, 12), Position = UDim2.new(0, x, 0.5, -6),
+		BackgroundColor3 = color, Text = "", AutoButtonColor = false, ZIndex = 31,
+	}, top)
+	corner(d, 6)
+	return d
+end
+local dotClose, dotMin, dotMax = dot(10, C.red), dot(30, C.yellow), dot(50, C.green)
+
+local titleHolder = make("Frame", {
+	BackgroundTransparency = 1, Size = UDim2.new(1, -190, 1, 0), Position = UDim2.new(0, 70, 0, 0), ZIndex = 30,
+}, top)
+local titleLabel = make("TextLabel", {
+	Text = APP, Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = C.text,
+	BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), TextTruncate = Enum.TextTruncate.AtEnd,
+	TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 30,
+}, titleHolder)
+
+local function topIcon(iconName, fallback, xOff)
+	local b = make("TextButton", {
+		Size = UDim2.fromOffset(26, 24), Position = UDim2.new(1, xOff, 0.5, -12),
+		BackgroundTransparency = 1, Text = "", ZIndex = 31,
+	}, top)
+	local img = make("ImageLabel", {
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(16, 16), BackgroundTransparency = 1, ImageColor3 = C.text, ZIndex = 31,
+	}, b)
+	if not applyIcon(img, iconName) then
+		img:Destroy()
+		b.Text = fallback
+		b.Font = Enum.Font.GothamBold
+		b.TextSize = 13
+		b.TextColor3 = C.text
+	end
+	return b
+end
+local btnChats = topIcon("messages-square", "=", -112)
+local btnModels = topIcon("cpu", "M", -84)
+local btnNew = topIcon("square-pen", "+", -56)
+local btnClear = topIcon("trash-2", "C", -28)
+
+local scroll = make("ScrollingFrame", {
+	Position = UDim2.new(0, 0, 0, 28), Size = UDim2.new(1, 0, 1, -62),
+	BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4,
+	ScrollBarImageColor3 = Color3.fromRGB(90, 90, 95),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+}, main)
+make("UIPadding", {
+	PaddingTop = UDim.new(0, 6), PaddingLeft = UDim.new(0, 8),
+	PaddingRight = UDim.new(0, 8), PaddingBottom = UDim.new(0, 6),
+}, scroll)
+make("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 3) }, scroll)
+
+local inputRow = make("Frame", {
+	Position = UDim2.new(0, 0, 1, -34), Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = C.input,
+}, main)
+make("TextLabel", {
+	Text = "oxzy:~$", Font = FONT, TextSize = TS, TextColor3 = C.prompt, BackgroundTransparency = 1,
+	Size = UDim2.new(0, 64, 1, 0), Position = UDim2.new(0, 8, 0, 0), TextXAlignment = Enum.TextXAlignment.Left,
+}, inputRow)
+local box = make("TextBox", {
+	Position = UDim2.new(0, 74, 0, 0), Size = UDim2.new(1, -82, 1, 0), BackgroundTransparency = 1,
+	Text = "", PlaceholderText = "Type a message or /help", PlaceholderColor3 = C.dim,
+	TextColor3 = C.text, Font = FONT, TextSize = TS, ClearTextOnFocus = false,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, inputRow)
+
+-- Drag (mouse + touch)
+do
+	local dragging, startPos, startInput
+	top.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging, startInput, startPos = true, i.Position, main.Position
+			i.Changed:Connect(function()
+				if i.UserInputState == Enum.UserInputState.End then dragging = false end
+			end)
+		end
+	end)
+	UIS.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			local d = i.Position - startInput
+			main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end)
+end
+
+--// TERMINAL OUTPUT
+local order = 0
+local function scrollDown()
+	task.defer(function()
+		task.wait()
+		scroll.CanvasPosition = Vector2.new(0, 999999)
+	end)
+end
+
+local function out(text, color, md)
+	local lines = {}
+	for line in (text .. "\n"):gmatch("(.-)\n") do
+		if md then
+			line = line:gsub("%*%*([^%*]+)%*%*", "<b>%1</b>")
+			line = line:gsub("`([^`]+)`", '<font color="' .. hex(C.code) .. '">%1</font>')
+		end
+		if color then line = '<font color="' .. hex(color) .. '">' .. line .. "</font>" end
+		table.insert(lines, line)
+	end
+	local lbl
+	local i = 1
+	while i <= #lines do
+		local buf, n = {}, 0
+		while i <= #lines and n < 4000 do
+			table.insert(buf, lines[i])
+			n += #lines[i]
+			i += 1
+		end
+		order += 1
+		lbl = make("TextLabel", {
+			Text = table.concat(buf, "\n"), RichText = true, Font = FONT, TextSize = TS,
+			TextColor3 = C.text, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top, BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = order,
+		}, scroll)
+	end
+	scrollDown()
+	return lbl
+end
+
+local function clearScreen()
+	for _, c in ipairs(scroll:GetChildren()) do
+		if c:IsA("GuiObject") then c:Destroy() end
+	end
+	codes = {}
+end
+
+local function echo(text)
+	out('<font color="' .. hex(C.prompt) .. '">oxzy:~$</font> ' .. esc(text))
+end
+
+--// CODE BOX (own box with Copy + Execute)
+local function pill(parent, iconName, text, color)
+	local b = make("TextButton", {
+		Size = UDim2.fromOffset(82, 22), BackgroundColor3 = color, Text = "", AutoButtonColor = true,
+	}, parent)
+	corner(b, 6)
+	local ic = make("ImageLabel", {
+		Size = UDim2.fromOffset(13, 13), Position = UDim2.new(0, 8, 0.5, -6),
+		BackgroundTransparency = 1, ImageColor3 = Color3.new(1, 1, 1),
+	}, b)
+	local has = applyIcon(ic, iconName)
+	if not has then ic:Destroy() end
+	local lbl = make("TextLabel", {
+		Text = text, Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 1, Position = UDim2.new(0, has and 25 or 6, 0, 0),
+		Size = UDim2.new(1, has and -28 or -12, 1, 0), TextXAlignment = Enum.TextXAlignment.Left,
+	}, b)
+	return b, lbl
+end
+
+local function codeBox(code, n)
+	order += 1
+	local cbox = make("Frame", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = C.input, LayoutOrder = order,
+	}, scroll)
+	corner(cbox, 8)
+	make("UIStroke", { Color = Color3.fromRGB(70, 70, 76), Thickness = 1 }, cbox)
+	make("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, cbox)
+
+	-- Header
+	local head = make("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = C.bar, LayoutOrder = 1 }, cbox)
+	corner(head, 8)
+	make("Frame", {
+		Size = UDim2.new(1, 0, 0, 8), Position = UDim2.new(0, 0, 1, -8),
+		BackgroundColor3 = C.bar, BorderSizePixel = 0,
+	}, head)
+
+	local titleIc = make("ImageLabel", {
+		Size = UDim2.fromOffset(14, 14), Position = UDim2.new(0, 10, 0.5, -7),
+		BackgroundTransparency = 1, ImageColor3 = C.dim,
+	}, head)
+	local hasT = applyIcon(titleIc, "code")
+	if not hasT then titleIc:Destroy() end
+	make("TextLabel", {
+		Text = "lua  #" .. n, Font = FONT, TextSize = 12, TextColor3 = C.dim, BackgroundTransparency = 1,
+		Position = UDim2.new(0, hasT and 30 or 10, 0, 0), Size = UDim2.new(0, 80, 1, 0),
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, head)
+
+	local btns = make("Frame", {
+		BackgroundTransparency = 1, Size = UDim2.new(0, 176, 1, 0), Position = UDim2.new(1, -182, 0, 0),
+	}, head)
+	make("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 6),
+	}, btns)
+	local bCopy, lCopy = pill(btns, "copy", "Copy", Color3.fromRGB(70, 70, 78))
+	local bRun, lRun = pill(btns, "play", "Execute", C.green)
+
+	-- Body
+	local shown = code
+	if #shown > 15000 then
+		shown = shown:sub(1, 15000) .. "\n-- [truncated in view, full code is still copied/executed] --"
+	end
+	local body = make("TextLabel", {
+		Text = shown, RichText = false, Font = FONT, TextSize = 12, TextColor3 = C.code,
+		TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+		BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		LayoutOrder = 2,
+	}, cbox)
+	make("UIPadding", {
+		PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
+		PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10),
+	}, body)
+
+	bCopy.MouseButton1Click:Connect(function()
+		lCopy.Text = copyText(code) and "Copied" or "No clipboard"
+		task.delay(1.3, function() if lCopy.Parent then lCopy.Text = "Copy" end end)
+	end)
+
+	local running = false
+	bRun.MouseButton1Click:Connect(function()
+		if running then return end
+		running = true
+		local fn, err = loadstring(code)
+		if not fn then
+			lRun.Text, bRun.BackgroundColor3 = "Syntax error", C.err
+			out("syntax error (#" .. n .. "): " .. esc(tostring(err)), C.err)
+			task.delay(1.6, function()
+				if lRun.Parent then lRun.Text, bRun.BackgroundColor3 = "Execute", C.green end
+				running = false
+			end)
+			return
+		end
+		lRun.Text = "Running"
+		task.spawn(function()
+			local ok, e = pcall(fn)
+			if not lRun.Parent then running = false return end
+			if ok then
+				lRun.Text, bRun.BackgroundColor3 = "Executed", C.green
+			else
+				lRun.Text, bRun.BackgroundColor3 = "Error", C.err
+				out("runtime error (#" .. n .. "): " .. esc(tostring(e)), C.err)
+			end
+			task.delay(1.6, function()
+				if lRun.Parent then lRun.Text, bRun.BackgroundColor3 = "Execute", C.green end
+				running = false
+			end)
+		end)
+	end)
+end
+
+local function splitBlocks(text)
+	local parts, pos = {}, 1
+	while true do
+		local s, e, _, code = text:find("```(%w*)\n?(.-)```", pos)
+		if not s then break end
+		if s > pos then table.insert(parts, { type = "text", text = text:sub(pos, s - 1) }) end
+		table.insert(parts, { type = "code", text = code })
+		pos = e + 1
+	end
+	if pos <= #text then table.insert(parts, { type = "text", text = text:sub(pos) }) end
+	return parts
+end
+
+local function printReply(text)
+	for _, p in ipairs(splitBlocks(text)) do
+		if p.type == "code" then
+			local code = trim(p.text)
+			if #code > 0 then
+				table.insert(codes, code)
+				codeBox(code, #codes)
+			end
+		else
+			local t = trim(p.text)
+			if #t > 0 then out(esc(t), nil, true) end
+		end
+	end
+	scrollDown()
+end
+
+--// NETWORK
+local req = (syn and syn.request) or (http and http.request) or http_request or request
+	or (fluxus and fluxus.request)
+
+local function jpost(url, headers, body)
+	if not req then return nil, "your executor has no request function" end
+	local ok, res = pcall(req, { Url = url, Method = "POST", Headers = headers, Body = HttpService:JSONEncode(body) })
+	if not ok then return nil, tostring(res) end
+	local okJ, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+	return res, okJ and data or nil
+end
+
+local function errText(data, res)
+	if type(data) == "table" and data.error then
+		if type(data.error) == "table" then return tostring(data.error.message or data.error.type or "unknown error") end
+		return tostring(data.error)
+	end
+	return "HTTP " .. tostring(res and res.StatusCode)
+end
+
+local function callProvider(p, msgs, system)
+	if p.kind == "free" then
+		local full = { { role = "system", content = system } }
+		for _, m in ipairs(msgs) do table.insert(full, m) end
+		local res, data = jpost("https://text.pollinations.ai/openai", { ["Content-Type"] = "application/json" },
+			{ model = p.model, messages = full })
+		if res and type(data) == "table" and data.choices and data.choices[1] and data.choices[1].message then
+			return data.choices[1].message.content
+		end
+		local last = msgs[#msgs].content:sub(1, 1200)
+		local ok, body = pcall(function()
+			return game:HttpGet("https://text.pollinations.ai/" .. HttpService:UrlEncode(last)
+				.. "?system=" .. HttpService:UrlEncode(system))
+		end)
+		if ok and body and #body > 0 then return body end
+		return nil, "the free provider is unavailable right now"
+	elseif p.kind == "anthropic" then
+		local res, data = jpost(p.url, {
+			["Content-Type"] = "application/json", ["x-api-key"] = p.key or "", ["anthropic-version"] = "2023-06-01",
+		}, { model = p.model, max_tokens = 2048, system = system, messages = msgs })
+		if not res then return nil, data end
+		if type(data) == "table" and data.content then
+			local buf = {}
+			for _, b in ipairs(data.content) do
+				if b.type == "text" then table.insert(buf, b.text) end
+			end
+			if #buf > 0 then return table.concat(buf, "\n") end
+		end
+		return nil, errText(data, res)
+	else
+		local full = { { role = "system", content = system } }
+		for _, m in ipairs(msgs) do table.insert(full, m) end
+		local headers = { ["Content-Type"] = "application/json" }
+		if p.key and p.key ~= "" then headers.Authorization = "Bearer " .. p.key end
+		local res, data = jpost(p.url, headers, { model = p.model, messages = full })
+		if not res then return nil, data end
+		if type(data) == "table" and data.choices and data.choices[1] and data.choices[1].message then
+			return data.choices[1].message.content
+		end
+		return nil, errText(data, res)
+	end
+end
+
+local function window(msgs)
+	local o = {}
+	for i = math.max(1, #msgs - 19), #msgs do o[#o + 1] = { role = msgs[i].role, content = msgs[i].content } end
+	while o[1] and o[1].role ~= "user" do table.remove(o, 1) end
+	return o
+end
+
+--// FORWARD DECLARATIONS
+local refreshChats, refreshModels, refreshTitle, openChat, newChat, handleCommand, hidePanels
+
+--// PANELS
+local panels = {}
+local function newPanel(title, iconName)
+	local p = make("Frame", {
+		Position = UDim2.new(0, 0, 0, 28), Size = UDim2.new(1, 0, 1, -28),
+		BackgroundColor3 = C.win, Visible = false, ZIndex = 20,
+	}, main)
+	local head = make("Frame", { Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = C.input }, p)
+	local ic = make("ImageLabel", {
+		Size = UDim2.fromOffset(16, 16), Position = UDim2.new(0, 10, 0.5, -8),
+		BackgroundTransparency = 1, ImageColor3 = C.text,
+	}, head)
+	local hasIc = applyIcon(ic, iconName)
+	if not hasIc then ic:Destroy() end
+	make("TextLabel", {
+		Text = title, Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = C.text,
+		BackgroundTransparency = 1, Position = UDim2.new(0, hasIc and 32 or 10, 0, 0),
+		Size = UDim2.new(1, -70, 1, 0), TextXAlignment = Enum.TextXAlignment.Left,
+	}, head)
+	local close = make("TextButton", {
+		Size = UDim2.fromOffset(28, 24), Position = UDim2.new(1, -34, 0.5, -12),
+		BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
+	}, head)
+	local cimg = make("ImageLabel", {
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(16, 16), BackgroundTransparency = 1, ImageColor3 = C.text,
+	}, close)
+	if not applyIcon(cimg, "x") then
+		cimg:Destroy()
+		close.Text = "X"
+		close.Font = Enum.Font.GothamBold
+		close.TextSize = 13
+		close.TextColor3 = C.text
+	end
+	close.MouseButton1Click:Connect(function() p.Visible = false end)
+	local body = make("Frame", {
+		Position = UDim2.new(0, 0, 0, 32), Size = UDim2.new(1, 0, 1, -32), BackgroundTransparency = 1,
+	}, p)
+	table.insert(panels, p)
+	return p, body
+end
+local function showPanel(p)
+	for _, q in ipairs(panels) do q.Visible = (q == p) end
+end
+hidePanels = function()
+	for _, q in ipairs(panels) do q.Visible = false end
+end
+
+local function labelBtn(parent, iconName, text, color, size)
+	local b = make("TextButton", {
+		Size = size or UDim2.new(1, 0, 0, 30), BackgroundColor3 = color or C.card, Text = "",
+		AutoButtonColor = true,
+	}, parent)
+	corner(b, 6)
+	local ic = make("ImageLabel", {
+		Size = UDim2.fromOffset(15, 15), Position = UDim2.new(0, 10, 0.5, -7),
+		BackgroundTransparency = 1, ImageColor3 = C.text,
+	}, b)
+	local has = applyIcon(ic, iconName)
+	if not has then ic:Destroy() end
+	local lbl = make("TextLabel", {
+		Text = text, Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = C.text,
+		BackgroundTransparency = 1, Size = UDim2.new(1, has and -34 or -16, 1, 0),
+		Position = UDim2.new(0, has and 30 or 8, 0, 0), TextXAlignment = Enum.TextXAlignment.Left,
+	}, b)
+	return b, lbl
+end
+
+-- Press / hold detection (works for mouse + touch)
+local function attachHold(btn, onClick, onHold)
+	local down, held, id = false, false, 0
+	btn.InputBegan:Connect(function(i)
+		if i.UserInputType ~= Enum.UserInputType.MouseButton1 and i.UserInputType ~= Enum.UserInputType.Touch then return end
+		down, held = true, false
+		id += 1
+		local my = id
+		local start = i.Position
+		task.delay(0.45, function()
+			if down and id == my and (i.Position - start).Magnitude < 12 then
+				held = true
+				onHold()
+			end
+		end)
+		i.Changed:Connect(function()
+			if i.UserInputState == Enum.UserInputState.End then
+				if down and not held and id == my and (i.Position - start).Magnitude < 12 then onClick() end
+				down = false
+			end
+		end)
+	end)
+end
+
+--// CHATS PANEL
+local chatsPanel, chatsBody = newPanel("Chats", "messages-square")
+local newChatBtn = labelBtn(chatsBody, "plus", "New chat", C.sel, UDim2.new(1, -16, 0, 30))
+newChatBtn.Position = UDim2.new(0, 8, 0, 6)
+local chatList = make("ScrollingFrame", {
+	Position = UDim2.new(0, 8, 0, 42), Size = UDim2.new(1, -16, 1, -66),
+	BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+	AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+}, chatsBody)
+make("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, chatList)
+make("TextLabel", {
+	Text = "Hold a chat to rename or delete it", Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = C.dim,
+	BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 18), Position = UDim2.new(0, 0, 1, -20),
+}, chatsBody)
+
+-- Action sheet (rename / delete)
+local sheet = make("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.new(0.88, 0, 0, 132), BackgroundColor3 = Color3.fromRGB(52, 52, 58),
+	Visible = false, ZIndex = 5,
+}, chatsBody)
+corner(sheet, 10)
+make("UISizeConstraint", { MaxSize = Vector2.new(320, 140) }, sheet)
+make("UIStroke", { Color = Color3.fromRGB(90, 90, 96), Thickness = 1 }, sheet)
+make("UIPadding", {
+	PaddingTop = UDim.new(0, 10), PaddingLeft = UDim.new(0, 10),
+	PaddingRight = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10),
+}, sheet)
+make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, sheet)
+local nameBox = make("TextBox", {
+	Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = C.input, TextColor3 = C.text, Font = FONT,
+	TextSize = 13, Text = "", PlaceholderText = "Chat name", PlaceholderColor3 = C.dim,
+	ClearTextOnFocus = false, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 1,
+}, sheet)
+corner(nameBox, 6)
+make("UIPadding", { PaddingLeft = UDim.new(0, 8) }, nameBox)
+local sheetRow = make("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = 2 }, sheet)
+make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }, sheetRow)
+local btnRename = labelBtn(sheetRow, "check", "Rename", C.sel, UDim2.new(0.5, -3, 1, 0))
+local btnDelete, delLbl = labelBtn(sheetRow, "trash-2", "Delete", Color3.fromRGB(160, 50, 50), UDim2.new(0.5, -3, 1, 0))
+local btnCancel = labelBtn(sheet, "x", "Cancel", C.card, UDim2.new(1, 0, 0, 28))
+btnCancel.LayoutOrder = 3
+
+local sheetChat, delArmed = nil, false
+local function openSheet(c)
+	sheetChat, delArmed = c, false
+	nameBox.Text = c.title or "New chat"
+	delLbl.Text = "Delete"
+	sheet.Visible = true
+end
+btnCancel.MouseButton1Click:Connect(function() sheet.Visible = false end)
+btnRename.MouseButton1Click:Connect(function()
+	if not sheetChat then return end
+	local t = trim(nameBox.Text):sub(1, 40)
+	if #t == 0 then return end
+	sheetChat.title = t
+	sheetChat.auto = false
+	saveChats()
+	sheet.Visible = false
+	refreshChats()
+	refreshTitle()
+end)
+btnDelete.MouseButton1Click:Connect(function()
+	if not sheetChat then return end
+	if not delArmed then
+		delArmed = true
+		delLbl.Text = "Confirm?"
+		return
+	end
+	for i, c in ipairs(chats) do
+		if c == sheetChat then table.remove(chats, i) break end
+	end
+	local wasActive = (sheetChat == activeChat)
+	sheetChat = nil
+	saveChats()
+	sheet.Visible = false
+	if wasActive then newChat() end
+	refreshChats()
+end)
+
+refreshChats = function()
+	for _, c in ipairs(chatList:GetChildren()) do
+		if c:IsA("GuiObject") then c:Destroy() end
+	end
+	local sorted = {}
+	for _, c in ipairs(chats) do table.insert(sorted, c) end
+	table.sort(sorted, function(a, b) return (a.updated or 0) > (b.updated or 0) end)
+	if #sorted == 0 then
+		make("TextLabel", {
+			Text = "No chats yet", Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = C.dim,
+			BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 30),
+		}, chatList)
+	end
+	for idx, c in ipairs(sorted) do
+		local row = make("TextButton", {
+			Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = (c == activeChat) and C.sel or C.card,
+			Text = "", AutoButtonColor = false, LayoutOrder = idx,
+		}, chatList)
+		corner(row, 6)
+		local ic = make("ImageLabel", {
+			Size = UDim2.fromOffset(15, 15), Position = UDim2.new(0, 10, 0.5, -7),
+			BackgroundTransparency = 1, ImageColor3 = C.text,
+		}, row)
+		local has = applyIcon(ic, "message-square")
+		if not has then ic:Destroy() end
+		make("TextLabel", {
+			Text = c.title or "New chat", Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = C.text,
+			BackgroundTransparency = 1, Position = UDim2.new(0, has and 32 or 10, 0, 0),
+			Size = UDim2.new(1, has and -92 or -70, 1, 0), TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+		}, row)
+		make("TextLabel", {
+			Text = #c.messages .. " msgs", Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = C.dim,
+			BackgroundTransparency = 1, Position = UDim2.new(1, -58, 0, 0), Size = UDim2.new(0, 52, 1, 0),
+			TextXAlignment = Enum.TextXAlignment.Right,
+		}, row)
+		attachHold(row, function()
+			openChat(c)
+			hidePanels()
+		end, function() openSheet(c) end)
+	end
+end
+
+btnChats.MouseButton1Click:Connect(function()
+	sheet.Visible = false
+	refreshChats()
+	showPanel(chatsPanel)
+end)
+
+--// MODELS PANEL
+local modelsPanel, modelsBody = newPanel("Models", "cpu")
+local modelList = make("ScrollingFrame", {
+	Position = UDim2.new(0, 8, 0, 6), Size = UDim2.new(1, -16, 1, -50),
+	BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+	AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+}, modelsBody)
+make("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, modelList)
+local addApiBtn = labelBtn(modelsBody, "plus", "Add custom API", C.sel, UDim2.new(1, -16, 0, 30))
+addApiBtn.Position = UDim2.new(0, 8, 1, -38)
+
+refreshModels = function()
+	for _, c in ipairs(modelList:GetChildren()) do
+		if c:IsA("GuiObject") then c:Destroy() end
+	end
+	for i, p in ipairs(providers) do
+		local row = make("TextButton", {
+			Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = (i == current) and C.sel or C.card,
+			Text = "", AutoButtonColor = false, LayoutOrder = i,
+		}, modelList)
+		corner(row, 6)
+		local ic = make("ImageLabel", {
+			Size = UDim2.fromOffset(15, 15), Position = UDim2.new(0, 10, 0.5, -7),
+			BackgroundTransparency = 1, ImageColor3 = C.text,
+		}, row)
+		local has = applyIcon(ic, (i == current) and "circle-check" or "bot")
+		if not has then ic:Destroy() end
+		make("TextLabel", {
+			Text = p.name, Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = C.text,
+			BackgroundTransparency = 1, Position = UDim2.new(0, has and 32 or 10, 0, 3),
+			Size = UDim2.new(1, -80, 0, 16), TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+		}, row)
+		make("TextLabel", {
+			Text = p.model .. (p.saved and "  |  saved" or ""), Font = FONT, TextSize = 11, TextColor3 = C.dim,
+			BackgroundTransparency = 1, Position = UDim2.new(0, has and 32 or 10, 0, 19),
+			Size = UDim2.new(1, -80, 0, 14), TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+		}, row)
+		row.MouseButton1Click:Connect(function()
+			current = i
+			refreshModels()
+			refreshTitle()
+			hidePanels()
+			out("model -> " .. esc(p.name), C.warn)
+		end)
+		if not p.builtin then
+			local del = make("TextButton", {
+				Size = UDim2.fromOffset(28, 28), Position = UDim2.new(1, -34, 0.5, -14),
+				BackgroundTransparency = 1, Text = "", ZIndex = 2,
+			}, row)
+			local dimg = make("ImageLabel", {
+				AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(15, 15), BackgroundTransparency = 1, ImageColor3 = C.err, ZIndex = 2,
+			}, del)
+			if not applyIcon(dimg, "trash-2") then
+				dimg:Destroy()
+				del.Text = "X"
+				del.TextColor3 = C.err
+				del.Font = Enum.Font.GothamBold
+				del.TextSize = 13
+			end
+			del.MouseButton1Click:Connect(function()
+				for k, q in ipairs(providers) do
+					if q == p then table.remove(providers, k) break end
+				end
+				if current > #providers then current = 1 end
+				for k, q in ipairs(providers) do
+					if q == p then current = 1 end
+				end
+				if p.saved then persistAPIs() end
+				refreshModels()
+				refreshTitle()
+			end)
+		end
+	end
+end
+
+--// ADD API PANEL
+local apiPanel, apiBody = newPanel("Add custom API", "key-round")
+local form = make("ScrollingFrame", {
+	Position = UDim2.new(0, 8, 0, 4), Size = UDim2.new(1, -16, 1, -8),
+	BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+	AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+}, apiBody)
+make("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, form)
+
+local formOrder = 0
+local function field(label, placeholder, default, masked)
+	formOrder += 1
+	make("TextLabel", {
+		Text = label, Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = C.dim,
+		BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 14),
+		TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = formOrder,
+	}, form)
+	formOrder += 1
+	local tb = make("TextBox", {
+		Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = C.input, TextColor3 = C.text, Font = FONT,
+		TextSize = 12, Text = default or "", PlaceholderText = masked and "" or placeholder,
+		PlaceholderColor3 = C.dim, ClearTextOnFocus = false, TextXAlignment = Enum.TextXAlignment.Left,
+		LayoutOrder = formOrder, ClipsDescendants = true,
+	}, form)
+	corner(tb, 6)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, tb)
+	if masked then
+		tb.TextTransparency = 1
+		local mask = make("TextLabel", {
+			Size = UDim2.new(1, -16, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
+			Font = FONT, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd, Text = placeholder, TextColor3 = C.dim,
+		}, tb)
+		local function upd()
+			if #tb.Text == 0 then
+				mask.Text, mask.TextColor3 = placeholder, C.dim
+			else
+				mask.Text, mask.TextColor3 = string.rep("*", math.min(#tb.Text, 40)), C.text
+			end
+		end
+		tb:GetPropertyChangedSignal("Text"):Connect(upd)
+		upd()
+	end
+	return tb
+end
+
+local fName = field("Name", "My AI", "", false)
+local fKey = field("ApiKeys", "API key (optional for some endpoints)", "", true)
+local fUrl = field("API URL (OpenAI-compatible or Anthropic)", "https://...", "https://api.openai.com/v1/chat/completions", false)
+local fModel = field("Model ID", "e.g. gpt-4o-mini", "", false)
+
+formOrder += 1
+local saveRow = make("TextButton", {
+	Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, Text = "", LayoutOrder = formOrder,
+}, form)
+local cb = make("Frame", {
+	Size = UDim2.fromOffset(18, 18), Position = UDim2.new(0, 2, 0.5, -9), BackgroundColor3 = C.sel,
+}, saveRow)
+corner(cb, 4)
+local cbMark = make("ImageLabel", {
+	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(13, 13), BackgroundTransparency = 1, ImageColor3 = Color3.new(1, 1, 1),
+}, cb)
+if not applyIcon(cbMark, "check") then
+	cbMark:Destroy()
+	cbMark = make("TextLabel", {
+		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "v", Font = Enum.Font.GothamBold,
+		TextSize = 12, TextColor3 = Color3.new(1, 1, 1),
+	}, cb)
+end
+make("TextLabel", {
+	Text = "Save (remember this API on this device)", Font = Enum.Font.Gotham, TextSize = 12,
+	TextColor3 = C.text, BackgroundTransparency = 1, Position = UDim2.new(0, 28, 0, 0),
+	Size = UDim2.new(1, -28, 1, 0), TextXAlignment = Enum.TextXAlignment.Left,
+}, saveRow)
+local saveOn = true
+saveRow.MouseButton1Click:Connect(function()
+	saveOn = not saveOn
+	cb.BackgroundColor3 = saveOn and C.sel or C.input
+	cbMark.Visible = saveOn
+end)
+
+formOrder += 1
+local addBtn = labelBtn(form, "plus", "Add model", C.green, UDim2.new(1, 0, 0, 32))
+addBtn.LayoutOrder = formOrder
+formOrder += 1
+local status = make("TextLabel", {
+	Text = "", Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = C.warn, BackgroundTransparency = 1,
+	Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextWrapped = true,
+	TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = formOrder,
+}, form)
+
+addApiBtn.MouseButton1Click:Connect(function()
+	status.Text = ""
+	showPanel(apiPanel)
+end)
+
+addBtn.MouseButton1Click:Connect(function()
+	local name, url, model, key = trim(fName.Text), trim(fUrl.Text), trim(fModel.Text), trim(fKey.Text)
+	if #name == 0 then status.Text, status.TextColor3 = "Enter a name.", C.err return end
+	if not url:lower():match("^https?://") then status.Text, status.TextColor3 = "API URL must start with https://", C.err return end
+	if #model == 0 then status.Text, status.TextColor3 = "Enter a model ID.", C.err return end
+
+	for i, q in ipairs(providers) do
+		if not q.builtin and q.name:lower() == name:lower() then
+			table.remove(providers, i)
+			break
+		end
+	end
+	local p = { name = name, url = url, model = model, key = key, kind = kindOf(url) }
+	table.insert(providers, p)
+	current = #providers
+
+	local note = ""
+	if saveOn then
+		p.saved = true
+		if not persistAPIs() then note = " (your executor cannot save files, so it is session-only)" end
+	else
+		persistAPIs()
+	end
+	refreshModels()
+	refreshTitle()
+	fName.Text, fKey.Text, fModel.Text = "", "", ""
+	status.Text = ""
+	hidePanels()
+	out("model -> " .. esc(name) .. esc(note), C.warn)
+end)
+
+btnModels.MouseButton1Click:Connect(function()
+	refreshModels()
+	showPanel(modelsPanel)
+end)
+
+--// CHAT LOGIC
+refreshTitle = function()
+	local t = activeChat and activeChat.title or "New chat"
+	titleLabel.Text = APP .. " — " .. t .. "  [" .. providers[current].name .. "]"
+end
+
+newChat = function()
+	activeChat = {
+		id = tostring(os.time()) .. tostring(math.random(100, 999)),
+		title = "New chat", auto = true, messages = {}, updated = os.time(),
+	}
+	clearScreen()
+	refreshTitle()
+end
+
+openChat = function(c)
+	activeChat = c
+	clearScreen()
+	for _, m in ipairs(c.messages) do
+		if m.role == "user" then echo(m.content) else printReply(m.content) end
+	end
+	refreshTitle()
+	refreshChats()
+end
+
+local function genTitle(chat, p)
+	local first = chat.messages[1] and chat.messages[1].content or ""
+	local second = chat.messages[2] and chat.messages[2].content or ""
+	local fallback = trim((first:gsub("%s+", " "))):sub(1, 28)
+	local t = callProvider(p, { {
+		role = "user",
+		content = "Conversation:\nUser: " .. first:sub(1, 300) .. "\nAssistant: " .. second:sub(1, 300)
+			.. "\n\nWrite a title for this conversation in 2 to 4 words. Reply with the title only.",
+	} }, "You write very short English chat titles. Output only the title, with no quotes and no trailing punctuation.")
+	if type(t) == "string" then
+		t = t:gsub("[\r\n]+", " ")
+		t = t:gsub("[\"'`*#]", "")
+		t = trim(t):sub(1, 32)
+	end
+	if not t or #t == 0 then t = fallback end
+	if #t == 0 then t = "New chat" end
+	if chat.auto ~= false then
+		chat.title = t
+		saveChats()
+		refreshTitle()
+		refreshChats()
+	end
+end
+
+local function ask(text)
+	busy = true
+	lastPrompt = text
+	local chat = activeChat
+	local isNew = (#chat.messages == 0)
+	table.insert(chat.messages, { role = "user", content = text })
+	chat.updated = os.time()
+	local listed = false
+	for _, c in ipairs(chats) do if c == chat then listed = true break end end
+	if not listed then table.insert(chats, chat) end
+	saveChats()
+
+	local p = providers[current]
+	local thinking = out(esc(p.name .. " is thinking"), C.dim)
+	local alive = true
+	task.spawn(function()
+		local n = 0
+		while alive and thinking and thinking.Parent do
+			n = n % 3 + 1
+			thinking.Text = '<font color="' .. hex(C.dim) .. '">' .. esc(p.name .. " is thinking") .. string.rep(".", n) .. "</font>"
+			task.wait(0.4)
+		end
+	end)
+
+	task.spawn(function()
+		local reply, err = callProvider(p, window(chat.messages), systemPrompt)
+		alive = false
+		if thinking and thinking.Parent then thinking:Destroy() end
+		if reply then
+			table.insert(chat.messages, { role = "assistant", content = reply })
+			chat.updated = os.time()
+			saveChats()
+			if activeChat == chat then printReply(reply) end
+			busy = false
+			if isNew and chat.auto ~= false then
+				task.spawn(function() pcall(genTitle, chat, p) end)
+			end
+		else
+			table.remove(chat.messages)
+			saveChats()
+			if activeChat == chat then out("error: " .. esc(tostring(err)), C.err) end
+			busy = false
+		end
+		refreshChats()
+	end)
+end
+
+--// COMMANDS
+local function help()
+	out([[commands:
+  /help            show this help
+  /new             start a new chat
+  /chats           open the chat list
+  /rename <name>   rename the current chat
+  /delete          delete the current chat
+  /clear           clear the current chat (screen + memory)
+  /wipe confirm    delete ALL chats
+  /models          list models
+  /model <no>      switch model
+  /api             add a custom API
+  /system <text>   set system prompt (/system reset)
+  /retry           resend your last message
+  /run [no]        execute a code block
+  /copy [no]       copy a code block
+  /export          copy the whole chat as text
+anything else is sent to the active model.]], C.dim)
+end
+
+handleCommand = function(line)
+	local cmd, arg = line:match("^/(%S+)%s*(.*)$")
+	cmd = cmd and cmd:lower()
+	arg = trim(arg)
+	if cmd == "help" then
+		help()
+	elseif cmd == "new" then
+		newChat()
+	elseif cmd == "chats" then
+		refreshChats()
+		showPanel(chatsPanel)
+	elseif cmd == "rename" then
+		if #arg == 0 then out("usage: /rename <name>", C.err) return end
+		activeChat.title = arg:sub(1, 40)
+		activeChat.auto = false
+		local listed = false
+		for _, c in ipairs(chats) do if c == activeChat then listed = true break end end
+		if listed then saveChats() end
+		refreshTitle()
+		refreshChats()
+		out("chat renamed.", C.warn)
+	elseif cmd == "delete" then
+		for i, c in ipairs(chats) do
+			if c == activeChat then table.remove(chats, i) break end
+		end
+		saveChats()
+		newChat()
+		refreshChats()
+		out("chat deleted.", C.warn)
+	elseif cmd == "clear" then
+		if activeChat then
+			activeChat.messages = {}
+			activeChat.updated = os.time()
+			local listed = false
+			for _, c in ipairs(chats) do if c == activeChat then listed = true break end end
+			if listed then saveChats() end
+		end
+		clearScreen()
+		refreshChats()
+	elseif cmd == "wipe" then
+		if arg:lower() ~= "confirm" then
+			out("this deletes ALL chats. type /wipe confirm to continue.", C.warn)
+			return
+		end
+		chats = {}
+		saveChats()
+		newChat()
+		refreshChats()
+		out("all chats deleted.", C.warn)
+	elseif cmd == "models" then
+		for i, p in ipairs(providers) do
+			out(((i == current) and "> " or "  ") .. i .. ". " .. esc(p.name) .. "  [" .. esc(p.model) .. "]", (i == current) and C.prompt or C.text)
+		end
+	elseif cmd == "model" then
+		local n = tonumber(arg)
+		if n and providers[n] then
+			current = n
+			refreshModels()
+			refreshTitle()
+			out("model -> " .. esc(providers[n].name), C.warn)
+		else
+			out("usage: /model <1-" .. #providers .. ">", C.err)
+		end
+	elseif cmd == "api" then
+		status.Text = ""
+		showPanel(apiPanel)
+	elseif cmd == "system" then
+		if #arg == 0 then
+			out("system prompt: " .. esc(systemPrompt), C.dim)
+		elseif arg:lower() == "reset" then
+			systemPrompt = BASE_SYSTEM
+			out("system prompt reset.", C.warn)
+		else
+			systemPrompt = arg
+			out("system prompt updated.", C.warn)
+		end
+	elseif cmd == "retry" then
+		local msgs = activeChat.messages
+		if msgs[#msgs] and msgs[#msgs].role == "assistant" then table.remove(msgs) end
+		if msgs[#msgs] and msgs[#msgs].role == "user" then lastPrompt = table.remove(msgs).content end
+		if not lastPrompt then out("nothing to retry.", C.err) return end
+		if busy then out("still waiting for the previous reply...", C.warn) return end
+		openChat(activeChat)
+		echo(lastPrompt)
+		ask(lastPrompt)
+	elseif cmd == "run" or cmd == "copy" then
+		local n = tonumber(arg) or #codes
+		local code = codes[n]
+		if not code then out("no code block #" .. tostring(n), C.err) return end
+		if cmd == "copy" then
+			local ok = copyText(code)
+			out(ok and ("code #" .. n .. " copied.") or "your executor has no clipboard.", ok and C.warn or C.err)
+		else
+			local fn, err = loadstring(code)
+			if not fn then out("syntax error: " .. esc(tostring(err)), C.err) return end
+			task.spawn(function()
+				local ok, e = pcall(fn)
+				if ok then out("code #" .. n .. " executed successfully.", C.prompt)
+				else out("runtime error: " .. esc(tostring(e)), C.err) end
+			end)
+		end
+	elseif cmd == "export" then
+		local buf = { "# " .. (activeChat.title or "Chat") }
+		for _, m in ipairs(activeChat.messages) do
+			table.insert(buf, (m.role == "user" and "You: " or "AI: ") .. m.content)
+		end
+		local ok = copyText(table.concat(buf, "\n\n"))
+		out(ok and "chat copied to clipboard." or "your executor has no clipboard.", ok and C.warn or C.err)
+	else
+		out("unknown command. type /help", C.err)
+	end
+end
+
+local function submit()
+	local text = trim(box.Text)
+	box.Text = ""
+	if #text == 0 then return end
+	if text:sub(1, 1) == "/" then
+		echo(text)
+		handleCommand(text)
+	elseif busy then
+		out("still waiting for the previous reply...", C.warn)
+	else
+		echo(text)
+		ask(text)
+	end
+end
+
+box.FocusLost:Connect(function(enter)
+	if enter then
+		submit()
+		if not UIS.TouchEnabled then box:CaptureFocus() end
+	end
+end)
+
+--// WINDOW BUTTONS
+dotClose.MouseButton1Click:Connect(function() gui:Destroy() end)
+local minimized, savedSize = false, nil
+dotMin.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	hidePanels()
+	if minimized then
+		savedSize = main.Size
+		sizeC.MinSize = Vector2.new(300, 28)
+		main.Size = UDim2.new(main.Size.X.Scale, main.Size.X.Offset, 0, 28)
+	else
+		sizeC.MinSize = Vector2.new(300, 280)
+		main.Size = savedSize or UDim2.fromScale(0.62, 0.64)
+	end
+	scroll.Visible, inputRow.Visible = not minimized, not minimized
+end)
+local maxed = false
+dotMax.MouseButton1Click:Connect(function()
+	if minimized then return end
+	maxed = not maxed
+	sizeC.MaxSize = maxed and Vector2.new(1400, 900) or Vector2.new(740, 540)
+	main.Size = maxed and UDim2.fromScale(0.92, 0.9) or UDim2.fromScale(0.62, 0.64)
+	main.Position = UDim2.fromScale(0.5, 0.5)
+end)
+btnNew.MouseButton1Click:Connect(function()
+	hidePanels()
+	newChat()
+end)
+btnClear.MouseButton1Click:Connect(function()
+	hidePanels()
+	handleCommand("/clear")
+end)
+newChatBtn.MouseButton1Click:Connect(function()
+	newChat()
+	hidePanels()
+end)
+
+--// START (clean screen, resume last chat if any)
+refreshModels()
+if #chats > 0 then
+	table.sort(chats, function(a, b) return (a.updated or 0) > (b.updated or 0) end)
+	openChat(chats[1])
+else
+	newChat()
+end
