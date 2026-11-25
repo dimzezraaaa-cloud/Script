@@ -1,0 +1,770 @@
+-- Toolbox (local, single script, Lua 5.1 style, no remotes / require)
+-- Searches the Creator Store through Open Cloud: POST /toolbox-service/v2/assets:search
+-- Needs an executor with an HTTP request function (request / http_request / syn.request).
+-- Everything you insert is client-side, only you can see it.
+--
+-- API KEY: do NOT upload this file with the key inside to a public repo.
+-- For a public loadstring, run this first in the executor instead:
+--   getgenv().LarperApiKey = "YOUR_KEY"
+
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local InsertService = game:GetService("InsertService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local SoundService = game:GetService("SoundService")
+
+local player = Players.LocalPlayer
+
+-- CONFIG --------------------------------------------------------------------
+local API_KEY = (getgenv and getgenv().LarperApiKey)
+	or "gJlqmUcjUUuHkDH6ekogPjuc8f9nEO3SSQ/D7bRjoCMMP4WrZXlKaGJHY2lPaUpTVXpJMU5pSXNJbXRwWkNJNkluTnBaeTB5TURJeExUQTNMVEV6VkRFNE9qVXhPalE1V2lJc0luUjVjQ0k2SWtwWFZDSjkuZXlKaGRXUWlPaUpTYjJKc2IzaEpiblJsY201aGJDSXNJbWx6Y3lJNklrTnNiM1ZrUVhWMGFHVnVkR2xqWVhScGIyNVRaWEoyYVdObElpd2lZbUZ6WlVGd2FVdGxlU0k2SW1kS2JIRnRWV05xVlZWMVNHdEVTRFpsYTI5blVHcDFZemhtT1c1RlR6TlRVMUV2UkRkaVVtcHZRMDFOVURSWGNpSXNJbTkzYm1WeVNXUWlPaUkzTmpVM01qWTFOVFEwSWl3aVpYaHdJam94TnprMU5qQTJORFU1TENKcFlYUWlPakUzT1RVMk1ESTROVGtzSW01aVppSTZNVGM1TlRZd01qZzFPWDAuTExhVkFJS2FHeEstLUlKRnRzcFdzV3JURU9naGsxemx2Z3Q3aTBFb0JIRzY1N040bEY4U29rbE9kR3ZXOTc1aXZIbFZVaTBIUnhOakJxQXNhYVNQMW9VR3BBbWNoUVVPTW01R1p0TUpFb0NNQW44c0hDQkdUUDl2SjVObU9XMXJyZjMyS1hTT0NaeDM4VmFiSFlwTDVBLWtXang2NXhadHduMktNWDJjVUNXZlJKWkdyUnpyT3hfNS1Tb0FidFlLd1BiLTRFOFpUS2FJZmhBNUhBNjA3RDhPUFVHOWxXMzdrcFdRLWt6MEpYR0tNai1HZV9KMFd0UF9xSThqZzVhTHltVGRGR0ZVYWlWc2hVMGQyR2J1XzJVN2UtdlZacFVha2dNMUR6ajM0ei1aUHRJT1BrQ2tJU3dHcEx6U1BqRmR4TDI3WENBNkxVZHo0MFFNOEJfbEdB"
+
+local SEARCH_ICON = "rbxassetid://89739568427411"
+local SEARCH_URL = "https://apis.roblox.com/toolbox-service/v2/assets:search"
+local PAGE_SIZE = 30
+
+local CATEGORIES = {
+	{ Name = "Models", Type = "Model", Kind = "model" },
+	{ Name = "Decals", Type = "Decal", Kind = "decal" },
+	{ Name = "Audio", Type = "Audio", Kind = "audio" },
+	{ Name = "Meshes", Type = "MeshPart", Kind = "model" },
+}
+
+local SORTS = { "Relevance", "Trending", "Top" }
+
+-- THEME (dark, flat, no gradients) -------------------------------------------
+local C_BG = Color3.fromRGB(16, 16, 19)
+local C_SURFACE = Color3.fromRGB(24, 24, 28)
+local C_CARD = Color3.fromRGB(33, 33, 39)
+local C_CARD_HOVER = Color3.fromRGB(44, 44, 52)
+local C_STROKE = Color3.fromRGB(50, 50, 58)
+local C_TEXT = Color3.fromRGB(235, 235, 240)
+local C_SUB = Color3.fromRGB(145, 145, 156)
+local C_ACCENT = Color3.fromRGB(56, 132, 255)
+local C_ACCENT_HOVER = Color3.fromRGB(86, 154, 255)
+local C_DANGER = Color3.fromRGB(196, 70, 70)
+local C_OK = Color3.fromRGB(80, 200, 120)
+local C_WARN = Color3.fromRGB(255, 200, 90)
+
+-- PARENT -----------------------------------------------------------------------
+local parent = nil
+local okH, hui = pcall(function()
+	return gethui and gethui()
+end)
+if okH and hui then
+	parent = hui
+else
+	local okC, core = pcall(function()
+		local c = game:GetService("CoreGui")
+		local test = Instance.new("Folder")
+		test.Parent = c
+		test:Destroy()
+		return c
+	end)
+	if okC and core then
+		parent = core
+	else
+		parent = player:WaitForChild("PlayerGui")
+	end
+end
+
+local old = parent:FindFirstChild("LarperToolbox")
+if old then old:Destroy() end
+
+-- HELPERS ----------------------------------------------------------------------
+local function create(className, props, par)
+	local inst = Instance.new(className)
+	for k, v in pairs(props) do
+		inst[k] = v
+	end
+	inst.Parent = par
+	return inst
+end
+
+local function corner(par, r)
+	return create("UICorner", { CornerRadius = UDim.new(0, r) }, par)
+end
+
+local function stroke(par, color, thickness)
+	return create("UIStroke", {
+		Color = color or C_STROKE,
+		Thickness = thickness or 1,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, par)
+end
+
+local function tween(inst, info, props)
+	local t = TweenService:Create(inst, info, props)
+	t:Play()
+	return t
+end
+
+local FAST = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local SMOOTH = TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local SMOOTH_IN = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+
+local function pressable(btn, base, hover)
+	btn.AutoButtonColor = false
+	btn.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			tween(btn, FAST, { BackgroundColor3 = hover })
+		end
+	end)
+	btn.InputEnded:Connect(function()
+		tween(btn, FAST, { BackgroundColor3 = base })
+	end)
+end
+
+local function makeButton(props, par, base, hover, radius)
+	props.BackgroundColor3 = base
+	props.Font = props.Font or Enum.Font.GothamBold
+	props.TextColor3 = props.TextColor3 or C_TEXT
+	props.BorderSizePixel = 0
+	local b = create("TextButton", props, par)
+	corner(b, radius or 8)
+	pressable(b, base, hover)
+	return b
+end
+
+local function makeBox(props, par)
+	props.BackgroundColor3 = C_SURFACE
+	props.TextColor3 = C_TEXT
+	props.PlaceholderColor3 = C_SUB
+	props.Font = Enum.Font.Gotham
+	props.ClearTextOnFocus = false
+	props.BorderSizePixel = 0
+	props.TextXAlignment = Enum.TextXAlignment.Left
+	local b = create("TextBox", props, par)
+	corner(b, 8)
+	stroke(b, C_STROKE, 1)
+	create("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, b)
+	return b
+end
+
+-- SIZE ---------------------------------------------------------------------------
+local camera = workspace.CurrentCamera
+local vp = camera and camera.ViewportSize or Vector2.new(800, 400)
+local PANEL_W = math.min(340, vp.X - 20)
+local PANEL_H = math.max(260, math.min(390, vp.Y - 52))
+
+-- GUI ------------------------------------------------------------------------------
+local gui = create("ScreenGui", {
+	Name = "LarperToolbox",
+	ResetOnSpawn = false,
+	IgnoreGuiInset = true,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, parent)
+
+local openBtn = create("TextButton", {
+	Text = "Toolbox",
+	Font = Enum.Font.GothamBold,
+	TextSize = 14,
+	TextColor3 = C_TEXT,
+	BackgroundColor3 = C_BG,
+	BorderSizePixel = 0,
+	AutoButtonColor = false,
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 0, -10),
+	Size = UDim2.fromOffset(104, 38),
+	TextYAlignment = Enum.TextYAlignment.Bottom,
+	ZIndex = 20,
+}, gui)
+corner(openBtn, 10)
+stroke(openBtn, C_STROKE, 1)
+create("UIPadding", { PaddingBottom = UDim.new(0, 6) }, openBtn)
+pressable(openBtn, C_BG, C_CARD_HOVER)
+
+local panel = create("CanvasGroup", {
+	Visible = false,
+	GroupTransparency = 1,
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Size = UDim2.fromOffset(PANEL_W, PANEL_H),
+	BackgroundColor3 = C_BG,
+	BorderSizePixel = 0,
+	ZIndex = 10,
+}, gui)
+corner(panel, 12)
+stroke(panel, C_STROKE, 1)
+local panelScale = create("UIScale", { Scale = 0.92 }, panel)
+
+local panelX = vp.X / 2
+local panelY = 46 + PANEL_H / 2
+panel.Position = UDim2.fromOffset(panelX, panelY)
+
+local titleBar = create("Frame", {
+	BackgroundTransparency = 1,
+	Size = UDim2.new(1, 0, 0, 40),
+}, panel)
+
+create("TextLabel", {
+	Text = "Toolbox",
+	Font = Enum.Font.GothamBold,
+	TextSize = 16,
+	TextColor3 = C_TEXT,
+	BackgroundTransparency = 1,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Size = UDim2.fromOffset(160, 40),
+	Position = UDim2.fromOffset(12, 0),
+}, titleBar)
+
+local clearBtn = makeButton({
+	Text = "Clear",
+	TextSize = 12,
+	Size = UDim2.fromOffset(54, 24),
+	Position = UDim2.new(1, -96, 0, 8),
+}, titleBar, C_CARD, C_CARD_HOVER, 6)
+
+local closeBtn = makeButton({
+	Text = "X",
+	TextSize = 13,
+	Size = UDim2.fromOffset(28, 24),
+	Position = UDim2.new(1, -38, 0, 8),
+}, titleBar, C_DANGER, Color3.fromRGB(220, 90, 90), 6)
+
+-- category strip
+local strip = create("ScrollingFrame", {
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	ScrollBarThickness = 0,
+	ScrollingDirection = Enum.ScrollingDirection.X,
+	Size = UDim2.new(1, -20, 0, 28),
+	Position = UDim2.fromOffset(10, 42),
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.X,
+}, panel)
+create("UIListLayout", {
+	FillDirection = Enum.FillDirection.Horizontal,
+	Padding = UDim.new(0, 6),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, strip)
+
+-- search row
+local searchBox = makeBox({
+	PlaceholderText = "Search the Creator Store...",
+	Text = "",
+	TextSize = 13,
+	Size = UDim2.new(1, -134, 0, 32),
+	Position = UDim2.fromOffset(10, 76),
+}, panel)
+
+local sortBtn = makeButton({
+	Text = SORTS[1],
+	TextSize = 11,
+	Size = UDim2.fromOffset(70, 32),
+	Position = UDim2.new(1, -118, 0, 76),
+}, panel, C_CARD, C_CARD_HOVER, 8)
+
+local searchBtn = create("ImageButton", {
+	BackgroundColor3 = C_ACCENT,
+	BorderSizePixel = 0,
+	AutoButtonColor = false,
+	Size = UDim2.fromOffset(34, 32),
+	Position = UDim2.new(1, -44, 0, 76),
+}, panel)
+corner(searchBtn, 8)
+pressable(searchBtn, C_ACCENT, C_ACCENT_HOVER)
+create("ImageLabel", {
+	Image = SEARCH_ICON,
+	BackgroundTransparency = 1,
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(18, 18),
+	ScaleType = Enum.ScaleType.Fit,
+}, searchBtn)
+
+-- grid
+local scroll = create("ScrollingFrame", {
+	BackgroundColor3 = C_SURFACE,
+	BorderSizePixel = 0,
+	ScrollBarThickness = 4,
+	ScrollBarImageColor3 = C_STROKE,
+	Size = UDim2.new(1, -20, 1, -160),
+	Position = UDim2.fromOffset(10, 114),
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y,
+}, panel)
+corner(scroll, 10)
+create("UIGridLayout", {
+	CellSize = UDim2.fromOffset(96, 120),
+	CellPadding = UDim2.fromOffset(6, 6),
+}, scroll)
+create("UIPadding", {
+	PaddingTop = UDim.new(0, 6),
+	PaddingLeft = UDim.new(0, 6),
+	PaddingBottom = UDim.new(0, 6),
+}, scroll)
+
+local status = create("TextLabel", {
+	Text = "",
+	Font = Enum.Font.GothamMedium,
+	TextSize = 12,
+	TextColor3 = C_SUB,
+	TextWrapped = true,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	BackgroundTransparency = 1,
+	Size = UDim2.new(1, -122, 0, 32),
+	Position = UDim2.new(0, 10, 1, -38),
+}, panel)
+
+local moreBtn = makeButton({
+	Text = "Load More",
+	TextSize = 12,
+	Size = UDim2.fromOffset(98, 28),
+	Position = UDim2.new(1, -108, 1, -36),
+}, panel, C_CARD, C_CARD_HOVER, 8)
+
+local function setStatus(text, kind)
+	status.Text = text
+	if kind == "ok" then
+		status.TextColor3 = C_OK
+	elseif kind == "warn" then
+		status.TextColor3 = C_WARN
+	else
+		status.TextColor3 = C_SUB
+	end
+end
+
+-- OPEN / CLOSE ANIMATION ---------------------------------------------------------
+local isOpen = false
+local token = 0
+
+local function setOpen(open)
+	isOpen = open
+	token = token + 1
+	local my = token
+
+	if open then
+		panel.Visible = true
+		panel.GroupTransparency = 1
+		panelScale.Scale = 0.92
+		panel.Position = UDim2.fromOffset(panelX, panelY - 14)
+		tween(panel, SMOOTH, {
+			GroupTransparency = 0,
+			Position = UDim2.fromOffset(panelX, panelY),
+		})
+		tween(panelScale, SMOOTH, { Scale = 1 })
+	else
+		tween(panel, SMOOTH_IN, {
+			GroupTransparency = 1,
+			Position = UDim2.fromOffset(panelX, panelY - 14),
+		})
+		local t = tween(panelScale, SMOOTH_IN, { Scale = 0.92 })
+		t.Completed:Connect(function()
+			if my == token then
+				panel.Visible = false
+			end
+		end)
+	end
+end
+
+openBtn.Activated:Connect(function()
+	setOpen(not isOpen)
+end)
+closeBtn.Activated:Connect(function()
+	setOpen(false)
+end)
+
+-- DRAGGING (title bar) ------------------------------------------------------------
+local dragging = false
+local dragStart = nil
+local startX, startY = 0, 0
+
+titleBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startX, startY = panelX, panelY
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch) then
+		local delta = input.Position - dragStart
+		local cam = workspace.CurrentCamera
+		local v = cam and cam.ViewportSize or Vector2.new(800, 400)
+		local nx = math.clamp(startX + delta.X, PANEL_W / 2, v.X - PANEL_W / 2)
+		local ny = math.clamp(startY + delta.Y, PANEL_H / 2, v.Y - PANEL_H / 2)
+		panelX, panelY = nx, ny
+		panel.Position = UDim2.fromOffset(nx, ny)
+	end
+end)
+
+-- INSERT ACTIONS -----------------------------------------------------------------------
+local inserted = {}
+local currentSound = nil
+local currentSoundId = nil
+
+local function stopSound()
+	if currentSound then
+		pcall(function() currentSound:Destroy() end)
+	end
+	currentSound = nil
+	currentSoundId = nil
+end
+
+local function spawnCFrame()
+	local char = player.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if root then
+		return root.CFrame * CFrame.new(0, 0, -8)
+	end
+	local cam = workspace.CurrentCamera
+	if cam then
+		return cam.CFrame * CFrame.new(0, 0, -10)
+	end
+	return CFrame.new(0, 10, 0)
+end
+
+local function loadAsset(id)
+	local ok, objs = pcall(function()
+		return game:GetObjects("rbxassetid://" .. tostring(id))
+	end)
+	if ok and type(objs) == "table" and objs[1] then
+		return objs
+	end
+	local ok2, model = pcall(function()
+		return InsertService:LoadAsset(id)
+	end)
+	if ok2 and model then
+		return { model }
+	end
+	return nil
+end
+
+local function insertModel(id)
+	local objs = loadAsset(id)
+	if not objs then return false, "Failed to load asset" end
+
+	local target = spawnCFrame()
+	local count = 0
+	for _, obj in ipairs(objs) do
+		pcall(function()
+			if obj:IsA("Model") then
+				obj:PivotTo(target)
+			elseif obj:IsA("BasePart") then
+				obj.CFrame = target
+			end
+		end)
+		obj.Parent = workspace
+		table.insert(inserted, obj)
+		count = count + 1
+	end
+	return true, "Inserted in front of you"
+end
+
+local function insertDecal(id)
+	local part = create("Part", {
+		Name = "LarperDecal",
+		Anchored = true,
+		CanCollide = false,
+		Size = Vector3.new(5, 5, 0.2),
+		CFrame = spawnCFrame(),
+		Material = Enum.Material.SmoothPlastic,
+		Color = Color3.new(1, 1, 1),
+	}, workspace)
+	create("Decal", {
+		Texture = "rbxassetid://" .. tostring(id),
+		Face = Enum.NormalId.Front,
+	}, part)
+	create("Decal", {
+		Texture = "rbxassetid://" .. tostring(id),
+		Face = Enum.NormalId.Back,
+	}, part)
+	table.insert(inserted, part)
+	return true, "Decal placed in front of you"
+end
+
+local function toggleAudio(id)
+	if currentSound and currentSoundId == id then
+		stopSound()
+		return true, "Audio stopped"
+	end
+	stopSound()
+	local sound = create("Sound", {
+		Name = "LarperAudio",
+		SoundId = "rbxassetid://" .. tostring(id),
+		Volume = 1,
+		Looped = false,
+	}, SoundService)
+	currentSound = sound
+	currentSoundId = id
+	sound:Play()
+	sound.Ended:Connect(function()
+		if currentSound == sound then
+			stopSound()
+		end
+	end)
+	return true, "Playing audio (tap again to stop)"
+end
+
+local function applyItem(cat, item)
+	if cat.Kind == "model" then
+		return insertModel(item.Id)
+	elseif cat.Kind == "decal" then
+		return insertDecal(item.Id)
+	elseif cat.Kind == "audio" then
+		return toggleAudio(item.Id)
+	end
+	return false, "Unsupported category"
+end
+
+clearBtn.Activated:Connect(function()
+	stopSound()
+	local n = 0
+	for _, obj in ipairs(inserted) do
+		pcall(function() obj:Destroy() end)
+		n = n + 1
+	end
+	inserted = {}
+	if n > 0 then
+		setStatus("Removed " .. n .. " inserted item(s)", "ok")
+	else
+		setStatus("Nothing to clear")
+	end
+end)
+
+-- HTTP + SEARCH ---------------------------------------------------------------------------
+local httpFn = (syn and syn.request) or (http and http.request) or http_request or request
+	or (fluxus and fluxus.request)
+
+local catIndex = 1
+local sortIndex = 1
+local nextToken = nil
+local finished = true
+local seen = {}
+local count = 0
+local loading = false
+
+local function clearGrid()
+	for _, child in ipairs(scroll:GetChildren()) do
+		if child:IsA("GuiObject") then
+			child:Destroy()
+		end
+	end
+end
+
+local function addCard(item, cat)
+	if seen[item.Id] then return end
+	seen[item.Id] = true
+	count = count + 1
+
+	local card = create("TextButton", {
+		Text = "",
+		BackgroundColor3 = C_CARD,
+		BorderSizePixel = 0,
+	}, scroll)
+	corner(card, 8)
+	pressable(card, C_CARD, C_CARD_HOVER)
+
+	create("ImageLabel", {
+		Image = ("rbxthumb://type=Asset&id=%d&w=150&h=150"):format(item.Id),
+		BackgroundColor3 = C_SURFACE,
+		BorderSizePixel = 0,
+		Size = UDim2.new(1, -8, 0, 84),
+		Position = UDim2.fromOffset(4, 4),
+	}, card)
+
+	create("TextLabel", {
+		Text = tostring(item.Name or item.Id),
+		Font = Enum.Font.GothamBold,
+		TextSize = 11,
+		TextColor3 = C_TEXT,
+		TextWrapped = true,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, -4, 0, 28),
+		Position = UDim2.new(0, 2, 1, -30),
+	}, card)
+
+	card.Activated:Connect(function()
+		setStatus("Working...")
+		local ok, msg = applyItem(cat, item)
+		setStatus(msg, ok and "ok" or "warn")
+	end)
+end
+
+local function searchRequest(cat, pageToken)
+	if not httpFn then
+		return nil, "This executor has no HTTP request function"
+	end
+
+	local body = {
+		searchCategoryType = cat.Type,
+		maxPageSize = PAGE_SIZE,
+		sortCategory = SORTS[sortIndex],
+		searchView = "Full",
+	}
+	if searchBox.Text ~= "" then
+		body.query = searchBox.Text
+	end
+	if pageToken then
+		body.pageToken = pageToken
+	end
+
+	local ok, res = pcall(function()
+		return httpFn({
+			Url = SEARCH_URL,
+			Method = "POST",
+			Headers = {
+				["x-api-key"] = API_KEY,
+				["Content-Type"] = "application/json",
+			},
+			Body = HttpService:JSONEncode(body),
+		})
+	end)
+	if not ok or not res then
+		return nil, "Request failed: " .. tostring(res)
+	end
+
+	local code = res.StatusCode or 0
+	if code == 401 or code == 403 then
+		return nil, "API key rejected (" .. code .. "). Check the key and its scopes."
+	elseif code == 429 then
+		return nil, "Rate limited (429). Wait a moment and retry."
+	elseif code < 200 or code >= 300 then
+		return nil, "HTTP " .. tostring(code)
+	end
+
+	local okJ, data = pcall(function()
+		return HttpService:JSONDecode(res.Body)
+	end)
+	if not okJ or type(data) ~= "table" then
+		return nil, "Could not read the response"
+	end
+	return data
+end
+
+local function readAssets(data, cat)
+	local list = data.creatorStoreAssets
+	if type(list) ~= "table" then return end
+	for _, entry in ipairs(list) do
+		local a = entry.asset
+		if type(a) == "table" and a.id then
+			addCard({ Id = tonumber(a.id), Name = a.name }, cat)
+		end
+	end
+	nextToken = data.nextPageToken
+	if nextToken == nil or nextToken == "" then
+		finished = true
+		nextToken = nil
+	else
+		finished = false
+	end
+end
+
+local function updateStatus()
+	setStatus("Loaded: " .. count .. (finished and " (end of results)" or " (more available)"))
+	moreBtn.Text = finished and "End" or "Load More"
+end
+
+local function loadMore()
+	if loading or finished or not nextToken then return end
+	loading = true
+	setStatus("Loading next page...")
+	local cat = CATEGORIES[catIndex]
+	local data, err = searchRequest(cat, nextToken)
+	if data then
+		readAssets(data, cat)
+		updateStatus()
+	else
+		setStatus(err, "warn")
+	end
+	loading = false
+end
+
+local function startSearch()
+	if loading then return end
+	loading = true
+	setStatus("Searching...")
+	clearGrid()
+	seen = {}
+	count = 0
+	nextToken = nil
+	finished = true
+
+	local cat = CATEGORIES[catIndex]
+	local data, err = searchRequest(cat, nil)
+	if not data then
+		setStatus(err, "warn")
+		loading = false
+		return
+	end
+
+	readAssets(data, cat)
+	if count == 0 then
+		setStatus("No results", "warn")
+		moreBtn.Text = "End"
+	else
+		updateStatus()
+	end
+	loading = false
+end
+
+-- tabs ----------------------------------------------------------------------------------------
+local tabButtons = {}
+
+local function selectCategory(index)
+	catIndex = index
+	for i, b in ipairs(tabButtons) do
+		if i == index then
+			tween(b, FAST, { BackgroundColor3 = C_ACCENT })
+		else
+			tween(b, FAST, { BackgroundColor3 = C_CARD })
+		end
+	end
+	stopSound()
+	startSearch()
+end
+
+for i, cat in ipairs(CATEGORIES) do
+	local b = create("TextButton", {
+		Text = cat.Name,
+		Font = Enum.Font.GothamBold,
+		TextSize = 12,
+		TextColor3 = C_TEXT,
+		BackgroundColor3 = (i == 1) and C_ACCENT or C_CARD,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.new(0, 0, 1, 0),
+		LayoutOrder = i,
+	}, strip)
+	corner(b, 8)
+	create("UIPadding", { PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14) }, b)
+	tabButtons[i] = b
+	b.Activated:Connect(function()
+		selectCategory(i)
+	end)
+end
+
+sortBtn.Activated:Connect(function()
+	sortIndex = sortIndex + 1
+	if sortIndex > #SORTS then sortIndex = 1 end
+	sortBtn.Text = SORTS[sortIndex]
+	startSearch()
+end)
+
+searchBtn.Activated:Connect(startSearch)
+searchBox.FocusLost:Connect(function(enterPressed)
+	if enterPressed then startSearch() end
+end)
+
+moreBtn.Activated:Connect(loadMore)
+
+scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+	local bottom = scroll.CanvasPosition.Y + scroll.AbsoluteWindowSize.Y
+	if scroll.AbsoluteCanvasSize.Y > 0 and bottom >= scroll.AbsoluteCanvasSize.Y - 40 then
+		loadMore()
+	end
+end)
+
+startSearch()
